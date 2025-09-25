@@ -27,12 +27,9 @@ class DateRangeModal(discord.ui.Modal, title='Укажите диапазон д
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
-            # Для команд check и makser user_id и category_name передаются в _get_events_in_range
-            user_id_for_check = interaction.user.id if self.log_type == 'check' else None
-
             events = await self.cog_instance._get_events_in_range(
                 interaction, self.date_range_input.value, self.log_type, 
-                user_id=user_id_for_check, category_name=self.category_name
+                category_name=self.category_name
             )
 
             if not events:
@@ -63,24 +60,26 @@ class MakserSelect(discord.ui.Select):
     def __init__(self, cog_instance):
         self.cog = cog_instance
         
+        options = []
         try:
-            with open('categories.json', 'r', encoding='utf-8') as f:
-                categories = list(json.load(f).keys())
-        except (FileNotFoundError, json.JSONDecodeError):
-            categories = []
+            categories_data = self.cog._load_json('categories.json', {})
+            categories = list(categories_data.keys())
+            
+            options.extend([discord.SelectOption(label=name, description=f"Отчет по категории '{name}'") for name in categories])
+            options.append(discord.SelectOption(label="Other", description="Отчет по ивентам без категории"))
+        except Exception as e:
+            print(f"Error loading categories for MakserSelect: {e}")
+            options = []
 
-        options = [discord.SelectOption(label=name, description=f"Отчет по категории '{name}'") for name in categories]
-        options.append(discord.SelectOption(label="Other", description="Отчет по ивентам без категории"))
-        
-        if not options:
-            options.append(discord.SelectOption(label="No categories found", value="disabled", default=True))
+        if not options or len(options) == 1: # Only "Other" is present
+            options = [discord.SelectOption(label="Категории не найдены", value="disabled", description="Создайте категории командой /category create")]
 
         super().__init__(
             placeholder="Выберите категорию для отчета...", 
             min_values=1, 
             max_values=1, 
             options=options,
-            disabled=(len(options) == 1 and options[0].value == "disabled")
+            disabled=(options[0].value == "disabled")
         )
 
     async def callback(self, interaction: discord.Interaction):
@@ -342,10 +341,16 @@ class LogsCog(commands.Cog):
     @app_commands.command(name="makser", description="Показывает панель для создания суммарного отчета по категориям.")
     @app_commands.guild_only()
     async def makser(self, interaction: discord.Interaction):
-        """Shows a panel to create a summary report by category."""
-        # `self` is the cog instance
-        view = MakserView(self)
-        await interaction.response.send_message("Выберите категорию для отчета:", view=view, ephemeral=True)
+        try:
+            view = MakserView(self)
+            await interaction.response.send_message("Выберите категорию для отчета:", view=view, ephemeral=True)
+        except Exception as e:
+            print(f"Критическая ошибка при создании вида для команды /makser: {e}")
+            await interaction.response.send_message(
+                "Произошла непредвиденная ошибка при попытке отобразить панель выбора категорий. "
+                "Пожалуйста, проверьте консоль бота для получения дополнительной информации.", 
+                ephemeral=True
+            )
 
     @app_commands.command(name="clear", description="Очищает историю текущего канала.")
     @app_commands.guild_only()

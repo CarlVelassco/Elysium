@@ -27,8 +27,12 @@ class DateRangeModal(discord.ui.Modal, title='Укажите диапазон д
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
+            # Для команд check и makser user_id и category_name передаются в _get_events_in_range
+            user_id_for_check = interaction.user.id if self.log_type == 'check' else None
+
             events = await self.cog_instance._get_events_in_range(
-                interaction, self.date_range_input.value, self.log_type, category_name=self.category_name
+                interaction, self.date_range_input.value, self.log_type, 
+                user_id=user_id_for_check, category_name=self.category_name
             )
 
             if not events:
@@ -294,28 +298,25 @@ class LogsCog(commands.Cog):
 
     @app_commands.command(name="logs", description="Общий лог за дату или период.")
     @app_commands.guild_only()
-    async def logs(self, interaction: discord.Interaction, date_range: str):
+    async def logs(self, interaction: discord.Interaction):
         modal = DateRangeModal(category_name=None, log_type='general', cog_instance=self)
-        modal.date_range_input.default = date_range
         await interaction.response.send_modal(modal)
 
     @app_commands.command(name="log", description="Лог определенной категории за дату или период.")
     @app_commands.guild_only()
-    async def log(self, interaction: discord.Interaction, категория: str, date_range: str):
+    async def log(self, interaction: discord.Interaction, категория: str):
         self.categories = self._load_json('categories.json', {})
         if категория not in self.categories and категория != 'Other':
             await interaction.response.send_message(f"Ошибка: Категория '{категория}' не найдена.", ephemeral=True)
             return
         
         modal = DateRangeModal(category_name=категория, log_type='category', cog_instance=self)
-        modal.date_range_input.default = date_range
         await interaction.response.send_modal(modal)
 
     @app_commands.command(name="night_log", description="Лог ночной активности за период.")
     @app_commands.guild_only()
-    async def night_log(self, interaction: discord.Interaction, date_range: str):
+    async def night_log(self, interaction: discord.Interaction):
         modal = DateRangeModal(category_name=None, log_type='night_log', cog_instance=self)
-        modal.date_range_input.default = date_range
         await interaction.response.send_modal(modal)
 
     @app_commands.command(name="check", description="Лог активности определенного человека за дату или период.")

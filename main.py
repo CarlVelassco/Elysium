@@ -1,92 +1,86 @@
 import discord
 from discord.ext import commands
 import os
-import json
 from dotenv import load_dotenv
+import asyncio
 
-# --- Загрузка конфигурации ---
-# Загружаем переменные окружения из файла .env
+# --- Настройка ---
+# Загружаем переменные окружения из .env файла
 load_dotenv()
+TOKEN = os.getenv('DISCORD_TOKEN')
+PARSE_CHANNEL_ID = os.getenv('PARSE_CHANNEL_ID')
+LOG_CHANNEL_ID = os.getenv('LOG_CHANNEL_ID')
 
-# Получаем токен и ID каналов из переменных окружения
-# ВАЖНО: Создайте файл .env в той же директории, что и main.py
-# и добавьте в него следующие строки, заменив значения на свои:
-# TOKEN="ВАШ_ТОКЕН_БОТА"
-# PARSE_CHANNEL_ID=ID_КАНАЛА_ДЛЯ_ПАРСИНГА
-# LOG_CHANNEL_ID=ID_КАНАЛА_ДЛЯ_ОТПРАВКИ_ЛОГОВ
-TOKEN = os.getenv("TOKEN")
-PARSE_CHANNEL_ID = int(os.getenv("PARSE_CHANNEL_ID"))
-LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID"))
+# Проверяем, что все переменные окружения заданы
+if not all([TOKEN, PARSE_CHANNEL_ID, LOG_CHANNEL_ID]):
+    print("Ошибка: Не все переменные окружения (DISCORD_TOKEN, PARSE_CHANNEL_ID, LOG_CHANNEL_ID) заданы.")
+    print("Пожалуйста, создайте или проверьте ваш .env файл или переменные на хостинге.")
+    exit()
 
-# --- Настройка бота ---
-# Определяем необходимые намерения (Intents)
+# Определяем намерения (Intents) - разрешения, которые нужны боту
 intents = discord.Intents.default()
-intents.messages = True
-intents.guilds = True
-intents.message_content = True
+intents.message_content = True # Необходимо для чтения содержимого сообщений
+intents.members = True       # Необходимо для получения информации о пользователях сервера
 
-# Создаем экземпляр бота
-bot = commands.Bot(command_prefix="/", intents=intents)
+class MyBot(commands.Bot):
+    """
+    Основной класс бота, наследуемый от commands.Bot.
+    При инициализации он создает путь к постоянному хранилищу, 
+    который будет использоваться всеми когами.
+    """
+    def __init__(self):
+        super().__init__(command_prefix="!", intents=intents)
+        # Путь к постоянному хранилищу данных (для хостинга с Volume)
+        self.data_path = '/data'
+        # Убедимся, что директория существует при запуске. Если нет - создаем.
+        os.makedirs(self.data_path, exist_ok=True)
 
-# --- Инициализация файлов данных ---
-# При запуске проверяем, существуют ли файлы для хранения данных.
-# Если нет, создаем их с пустыми структурами.
-def initialize_data_files():
-    """Инициализирует файлы JSON для хранения данных, если они не существуют."""
-    if not os.path.exists('categories.json'):
-        with open('categories.json', 'w', encoding='utf-8') as f:
-            # Категории хранятся в формате: {"Название категории": ["Ивент1", "Ивент2"]}
-            json.dump({"Other": []}, f, ensure_ascii=False, indent=4)
-    if not os.path.exists('blum_list.json'):
-        with open('blum_list.json', 'w', encoding='utf-8') as f:
-            # Blum лист хранится как список ID пользователей
-            json.dump([], f, ensure_ascii=False, indent=4)
-
-# --- Событие готовности бота ---
-@bot.event
-async def on_ready():
-    """Событие, которое выполняется при успешном запуске и подключении бота."""
-    print(f'Бот {bot.user} успешно запущен!')
-    try:
-        # Синхронизируем команды с Discord, чтобы они появились в списке
-        synced = await bot.tree.sync()
-        print(f"Синхронизировано {len(synced)} команд.")
-    except Exception as e:
-        print(f"Ошибка синхронизации команд: {e}")
-    # Инициализируем файлы данных при запуске
-    initialize_data_files()
-
-# --- Загрузка расширений (Cogs) ---
-# Асинхронная функция для загрузки всех файлов с командами (когов).
-async def load_cogs():
-    """Загружает все коги из директории cogs."""
-    # Мы будем использовать коги для лучшей организации кода.
-    # Файлы с командами должны находиться в папке /cogs
-    if not os.path.exists('cogs'):
-        os.makedirs('cogs')
-    # Имена файлов когов (без .py)
-    cogs_to_load = ['category_cog', 'blum_cog', 'logs_cog']
-    for cog_name in cogs_to_load:
+    async def setup_hook(self):
+        """Выполняется при запуске бота для загрузки модулей (когов)."""
+        initial_extensions = [
+            'cogs.category_cog',
+            'cogs.blum_cog',
+            'cogs.logs_cog'
+        ]
+        for extension in initial_extensions:
+            try:
+                await self.load_extension(extension)
+                print(f"Ког '{extension.split('.')[-1]}' успешно загружен.")
+            except Exception as e:
+                print(f"Не удалось загрузить ког '{extension.split('.')[-1]}': {e}")
+        
+        # Синхронизируем слэш-команды с Discord
         try:
-            await bot.load_extension(f'cogs.{cog_name}')
-            print(f"Ког '{cog_name}' успешно загружен.")
+            synced = await self.tree.sync()
+            print(f"Синхронизировано {len(synced)} команд.")
         except Exception as e:
-            print(f"Не удалось загрузить ког '{cog_name}': {e}")
+            print(f"Ошибка при синхронизации команд: {e}")
+
+    async def on_ready(self):
+        """Событие, которое выполняется, когда бот успешно подключился к Discord."""
+        print(f'Бот {self.user} ({self.user.id}) успешно запущен!')
+        await self.change_presence(activity=discord.Game(name="Анализирую логи"))
 
 
-# --- Основная точка входа ---
 async def main():
-    """Основная функция для запуска бота."""
-    # Передаем ID каналов в коги через атрибуты бота
-    bot.parse_channel_id = PARSE_CHANNEL_ID
-    bot.log_channel_id = LOG_CHANNEL_ID
-    # Загружаем коги
-    await load_cogs()
-    # Запускаем бота с токеном
-    await bot.start(TOKEN)
+    """Основная асинхронная функция для запуска бота."""
+    bot = MyBot()
+    async with bot:
+        await bot.start(TOKEN)
 
-
+# --- Точка входа ---
 if __name__ == "__main__":
-    import asyncio
-    # Запускаем основную асинхронную функцию
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except TypeError as e:
+        if "received NoneType instead" in str(e):
+            print("\nКРИТИЧЕСКАЯ ОШИБКА: Токен не найден.")
+            print("Убедитесь, что переменная DISCORD_TOKEN правильно установлена в .env файле или на хостинге.\n")
+        else:
+            raise e
+    except discord.errors.LoginFailure:
+        print("\nКРИТИЧЕСКАЯ ОШИБКА: Неверный токен.")
+        print("Пожалуйста, проверьте правильность токена в .env файле или на хостинге.\n")
+    except Exception as e:
+        print(f"Произошла непредвиденная ошибка при запуске бота: {e}")
+

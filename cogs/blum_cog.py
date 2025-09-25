@@ -2,24 +2,30 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 import json
+import os
 
 class BlumCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.blum_file = 'blum_list.json'
+        # Получаем путь к данным из основного объекта бота для централизованного управления
+        self.data_path = getattr(self.bot, 'data_path', '.')
+        self.blum_file = os.path.join(self.data_path, 'blum_list.json')
         self.blum_list = self._load_json()
 
     def _load_json(self):
+        """Загружает данные из JSON файла. Если файл не существует, создает его."""
         try:
             with open(self.blum_file, 'r', encoding='utf-8') as f:
-                # Убедимся, что загружаем список ID в виде целых чисел
                 return [int(user_id) for user_id in json.load(f)]
         except (FileNotFoundError, json.JSONDecodeError, TypeError):
+             # Если файл не найден или пуст, создаем его с пустым списком
+            self._save_json([])
             return []
 
-    def _save_json(self):
+    def _save_json(self, data=None):
+        """Сохраняет данные в JSON файл."""
         with open(self.blum_file, 'w', encoding='utf-8') as f:
-            json.dump(self.blum_list, f, ensure_ascii=False, indent=4)
+            json.dump(data if data is not None else self.blum_list, f, ensure_ascii=False, indent=4)
 
     blum = app_commands.Group(name="blum", description="Команды для управления списком Blum")
 

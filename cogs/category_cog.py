@@ -2,23 +2,30 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 import json
+import os
 
 class CategoryCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.categories_file = 'categories.json'
+        # Получаем путь к данным из основного объекта бота для централизованного управления
+        self.data_path = getattr(self.bot, 'data_path', '.')
+        self.categories_file = os.path.join(self.data_path, 'categories.json')
         self.categories = self._load_json()
 
     def _load_json(self):
+        """Загружает данные из JSON файла. Если файл не существует, создает его."""
         try:
             with open(self.categories_file, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except (FileNotFoundError, json.JSONDecodeError):
+            # Если файл не найден или пуст, создаем его с пустым словарем
+            self._save_json({})
             return {}
 
-    def _save_json(self):
+    def _save_json(self, data=None):
+        """Сохраняет данные в JSON файл."""
         with open(self.categories_file, 'w', encoding='utf-8') as f:
-            json.dump(self.categories, f, ensure_ascii=False, indent=4)
+            json.dump(data if data is not None else self.categories, f, ensure_ascii=False, indent=4)
 
     category = app_commands.Group(name="category", description="Команды для управления категориями ивентов")
 
@@ -52,7 +59,8 @@ class CategoryCog(commands.Cog):
             await interaction.response.send_message(f"Категория '{категория}' не найдена.", ephemeral=True)
             return
         
-        if ивент in self.categories[категория]:
+        # Проверка на дубликаты без учета регистра
+        if ивент.lower() in [e.lower() for e in self.categories[категория]]:
             await interaction.response.send_message(f"Ивент '{ивент}' уже есть в категории '{категория}'.", ephemeral=True)
         else:
             self.categories[категория].append(ивент)
@@ -67,10 +75,13 @@ class CategoryCog(commands.Cog):
             await interaction.response.send_message(f"Категория '{категория}' не найдена.", ephemeral=True)
             return
         
-        if ивент not in self.categories[категория]:
+        # Ищем ивент без учета регистра для корректного удаления
+        event_to_remove = next((e for e in self.categories[категория] if e.lower() == ивент.lower()), None)
+        
+        if not event_to_remove:
             await interaction.response.send_message(f"Ивент '{ивент}' не найден в категории '{категория}'.", ephemeral=True)
         else:
-            self.categories[категория].remove(ивент)
+            self.categories[категория].remove(event_to_remove)
             self._save_json()
             await interaction.response.send_message(f"Ивент '{ивент}' успешно удален из категории '{категория}'.", ephemeral=True)
 
@@ -83,7 +94,7 @@ class CategoryCog(commands.Cog):
 
         embed = discord.Embed(title="Список категорий и ивентов", color=discord.Color.blue())
         for category, events in self.categories.items():
-            event_list = "\n".join(f"- {event}" for event in events) if events else "Пусто"
+            event_list = "\n".join(f"- {event}" for event in events) if events else "*Пусто*"
             embed.add_field(name=f"📁 {category}", value=event_list, inline=False)
         
         await interaction.response.send_message(embed=embed, ephemeral=True)

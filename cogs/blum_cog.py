@@ -1,79 +1,67 @@
 import discord
-from discord.ext import commands
 from discord import app_commands
+from discord.ext import commands
 import json
 
 class BlumCog(commands.Cog):
-    """Ког для управления списком пользователей Blum."""
     def __init__(self, bot):
         self.bot = bot
         self.blum_file = 'blum_list.json'
+        self.blum_list = self._load_json()
 
-    def load_blum_list(self):
-        """Загружает список Blum из JSON файла."""
-        with open(self.blum_file, 'r', encoding='utf-8') as f:
-            return json.load(f)
+    def _load_json(self):
+        try:
+            with open(self.blum_file, 'r', encoding='utf-8') as f:
+                # Убедимся, что загружаем список ID в виде целых чисел
+                return [int(user_id) for user_id in json.load(f)]
+        except (FileNotFoundError, json.JSONDecodeError, TypeError):
+            return []
 
-    def save_blum_list(self, data):
-        """Сохраняет список Blum в JSON файл."""
+    def _save_json(self):
         with open(self.blum_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
+            json.dump(self.blum_list, f, ensure_ascii=False, indent=4)
 
-    blum_group = app_commands.Group(name="blum", description="Команды для управления списком Blum")
+    blum = app_commands.Group(name="blum", description="Команды для управления списком Blum")
 
-    @blum_group.command(name="add", description="Добавить пользователя в список Blum")
-    @app_commands.describe(user="Пользователь, которого нужно добавить")
-    async def add_user(self, interaction: discord.Interaction, user: discord.User):
-        """Добавляет пользователя в список Blum."""
-        blum_list = self.load_blum_list()
-        if user.id in blum_list:
-            await interaction.response.send_message(f"Пользователь {user.mention} уже в списке Blum.", ephemeral=True)
-            return
-        blum_list.append(user.id)
-        self.save_blum_list(blum_list)
-        await interaction.response.send_message(f"Пользователь {user.mention} успешно добавлен в список Blum.", ephemeral=True)
+    @blum.command(name="add", description="Добавить пользователя в список Blum.")
+    @app_commands.describe(пользователь="Пользователь, которого нужно добавить")
+    async def add(self, interaction: discord.Interaction, пользователь: discord.User):
+        self.blum_list = self._load_json()
+        if пользователь.id in self.blum_list:
+            await interaction.response.send_message(f"Пользователь {пользователь.mention} уже в списке Blum.", ephemeral=True)
+        else:
+            self.blum_list.append(пользователь.id)
+            self._save_json()
+            await interaction.response.send_message(f"Пользователь {пользователь.mention} успешно добавлен в список Blum.", ephemeral=True)
 
-    @blum_group.command(name="remove", description="Удалить пользователя из списка Blum")
-    @app_commands.describe(user="Пользователь, которого нужно удалить")
-    async def remove_user(self, interaction: discord.Interaction, user: discord.User):
-        """Удаляет пользователя из списка Blum."""
-        blum_list = self.load_blum_list()
-        if user.id not in blum_list:
-            await interaction.response.send_message(f"Пользователь {user.mention} не найден в списке Blum.", ephemeral=True)
-            return
-        blum_list.remove(user.id)
-        self.save_blum_list(blum_list)
-        await interaction.response.send_message(f"Пользователь {user.mention} удален из списка Blum.", ephemeral=True)
+    @blum.command(name="remove", description="Убрать пользователя из списка Blum.")
+    @app_commands.describe(пользователь="Пользователь, которого нужно убрать")
+    async def remove(self, interaction: discord.Interaction, пользователь: discord.User):
+        self.blum_list = self._load_json()
+        if пользователь.id not in self.blum_list:
+            await interaction.response.send_message(f"Пользователя {пользователь.mention} нет в списке Blum.", ephemeral=True)
+        else:
+            self.blum_list.remove(пользователь.id)
+            self._save_json()
+            await interaction.response.send_message(f"Пользователь {пользователь.mention} успешно убран из списка Blum.", ephemeral=True)
 
-    @blum_group.command(name="list", description="Показать всех пользователей в списке Blum")
-    async def list_users(self, interaction: discord.Interaction):
-        """Выводит список всех пользователей Blum."""
-        blum_list = self.load_blum_list()
-        if not blum_list:
+    @blum.command(name="list", description="Показать всех пользователей в списке Blum.")
+    async def list(self, interaction: discord.Interaction):
+        self.blum_list = self._load_json()
+        if not self.blum_list:
             await interaction.response.send_message("Список Blum пуст.", ephemeral=True)
             return
 
-        description = []
-        for user_id in blum_list:
-            user = self.bot.get_user(user_id) or await self.bot.fetch_user(user_id)
-            if user:
-                description.append(f"- {user.mention} (`{user.name}`)")
-            else:
-                description.append(f"- <@{user_id}> (Пользователь не найден)")
-
-        embed = discord.Embed(
-            title="🌙 Список пользователей Blum",
-            description="\n".join(description),
-            color=discord.Color.purple()
-        )
+        description = "\n".join(f"- <@{user_id}>" for user_id in self.blum_list)
+        embed = discord.Embed(title="Пользователи в списке Blum", description=description, color=discord.Color.purple())
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @blum_group.command(name="clear", description="Полностью очистить список Blum")
-    async def clear_list(self, interaction: discord.Interaction):
-        """Очищает список Blum."""
-        self.save_blum_list([])
+    @blum.command(name="clear", description="Полностью очистить список Blum.")
+    async def clear(self, interaction: discord.Interaction):
+        self.blum_list = []
+        self._save_json()
         await interaction.response.send_message("Список Blum был полностью очищен.", ephemeral=True)
 
-
-async def setup(bot):
+async def setup(bot: commands.Bot):
     await bot.add_cog(BlumCog(bot))
+

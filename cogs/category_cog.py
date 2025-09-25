@@ -1,146 +1,93 @@
 import discord
-from discord.ext import commands
 from discord import app_commands
+from discord.ext import commands
 import json
 
 class CategoryCog(commands.Cog):
-    """Ког для управления категориями ивентов."""
     def __init__(self, bot):
         self.bot = bot
         self.categories_file = 'categories.json'
+        self.categories = self._load_json()
 
-    def load_categories(self):
-        """Загружает категории из JSON файла."""
-        with open(self.categories_file, 'r', encoding='utf-8') as f:
-            return json.load(f)
+    def _load_json(self):
+        try:
+            with open(self.categories_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {}
 
-    def save_categories(self, data):
-        """Сохраняет категории в JSON файл."""
+    def _save_json(self):
         with open(self.categories_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
+            json.dump(self.categories, f, ensure_ascii=False, indent=4)
 
-    category_group = app_commands.Group(name="category", description="Команды для управления категориями")
+    category = app_commands.Group(name="category", description="Команды для управления категориями ивентов")
 
-    @category_group.command(name="create", description="Создать новую категорию")
-    @app_commands.describe(name="Название новой категории")
-    async def create_category(self, interaction: discord.Interaction, name: str):
-        """Создает новую категорию для ивентов."""
-        categories = self.load_categories()
-        if name in categories:
-            await interaction.response.send_message(f"Категория `{name}` уже существует.", ephemeral=True)
-            return
-        categories[name] = []
-        self.save_categories(categories)
-        await interaction.response.send_message(f"Категория `{name}` успешно создана.", ephemeral=True)
-
-    @category_group.command(name="delete", description="Удалить существующую категорию")
-    @app_commands.describe(name="Название категории для удаления")
-    async def delete_category(self, interaction: discord.Interaction, name: str):
-        """Удаляет существующую категорию."""
-        categories = self.load_categories()
-        if name == "Other":
-            await interaction.response.send_message("Нельзя удалить категорию по умолчанию `Other`.", ephemeral=True)
-            return
-        if name not in categories:
-            await interaction.response.send_message(f"Категория `{name}` не найдена.", ephemeral=True)
-            return
-
-        # Перемещаем ивенты из удаляемой категории в 'Other'
-        events_to_move = categories[name]
-        if "Other" in categories:
-             categories["Other"].extend(events_to_move)
+    @category.command(name="create", description="Создать новую категорию.")
+    @app_commands.describe(название="Название новой категории")
+    async def create(self, interaction: discord.Interaction, название: str):
+        self.categories = self._load_json()
+        if название in self.categories:
+            await interaction.response.send_message(f"Категория '{название}' уже существует.", ephemeral=True)
         else:
-             categories["Other"] = events_to_move
+            self.categories[название] = []
+            self._save_json()
+            await interaction.response.send_message(f"Категория '{название}' успешно создана.", ephemeral=True)
 
-        del categories[name]
-        self.save_categories(categories)
-        await interaction.response.send_message(f"Категория `{name}` удалена. Все ивенты перемещены в `Other`.", ephemeral=True)
+    @category.command(name="delete", description="Удалить существующую категорию.")
+    @app_commands.describe(название="Название категории для удаления")
+    async def delete(self, interaction: discord.Interaction, название: str):
+        self.categories = self._load_json()
+        if название not in self.categories:
+            await interaction.response.send_message(f"Категория '{название}' не найдена.", ephemeral=True)
+        else:
+            del self.categories[название]
+            self._save_json()
+            await interaction.response.send_message(f"Категория '{название}' успешно удалена.", ephemeral=True)
 
-    @delete_category.autocomplete('name')
-    async def delete_category_autocomplete(self, interaction: discord.Interaction, current: str):
-        """Автодополнение для команды удаления категории."""
-        categories = self.load_categories()
-        return [
-            app_commands.Choice(name=cat, value=cat)
-            for cat in categories if current.lower() in cat.lower() and cat != "Other"
-        ]
-
-    @category_group.command(name="add", description="Добавить ивент в категорию")
-    @app_commands.describe(category_name="Название категории", event_name="Название ивента")
-    async def add_event_to_category(self, interaction: discord.Interaction, category_name: str, event_name: str):
-        """Добавляет ивент в указанную категорию."""
-        categories = self.load_categories()
-        if category_name not in categories:
-            await interaction.response.send_message(f"Категория `{category_name}` не найдена.", ephemeral=True)
+    @category.command(name="add", description="Добавить ивент в категорию.")
+    @app_commands.describe(категория="Категория, в которую добавляем", ивент="Название ивента")
+    async def add(self, interaction: discord.Interaction, категория: str, ивент: str):
+        self.categories = self._load_json()
+        if категория not in self.categories:
+            await interaction.response.send_message(f"Категория '{категория}' не найдена.", ephemeral=True)
             return
-        # Удаляем ивент из всех других категорий, чтобы избежать дублирования
-        for cat, events in categories.items():
-            if event_name in events:
-                events.remove(event_name)
-
-        categories[category_name].append(event_name)
-        self.save_categories(categories)
-        await interaction.response.send_message(f"Ивент `{event_name}` добавлен в категорию `{category_name}`.", ephemeral=True)
-
-    @add_event_to_category.autocomplete('category_name')
-    async def add_event_autocomplete(self, interaction: discord.Interaction, current: str):
-        """Автодополнение для выбора категории при добавлении ивента."""
-        categories = self.load_categories()
-        return [
-            app_commands.Choice(name=cat, value=cat)
-            for cat in categories if current.lower() in cat.lower()
-        ]
-
-    @category_group.command(name="remove", description="Удалить ивент из категории")
-    @app_commands.describe(category_name="Название категории", event_name="Название ивента")
-    async def remove_event_from_category(self, interaction: discord.Interaction, category_name: str, event_name: str):
-        """Удаляет ивент из категории и перемещает его в 'Other'."""
-        categories = self.load_categories()
-        if category_name not in categories:
-            await interaction.response.send_message(f"Категория `{category_name}` не найдена.", ephemeral=True)
-            return
-        if event_name not in categories[category_name]:
-            await interaction.response.send_message(f"Ивент `{event_name}` не найден в категории `{category_name}`.", ephemeral=True)
-            return
-
-        categories[category_name].remove(event_name)
-        # Добавляем в 'Other' если этой категории не существует
-        if "Other" not in categories:
-            categories["Other"] = []
-        categories["Other"].append(event_name)
-
-        self.save_categories(categories)
-        await interaction.response.send_message(f"Ивент `{event_name}` удален из категории `{category_name}` и перемещен в `Other`.", ephemeral=True)
-
-    @remove_event_from_category.autocomplete('category_name')
-    async def remove_event_category_autocomplete(self, interaction: discord.Interaction, current: str):
-        """Автодополнение для выбора категории при удалении ивента."""
-        categories = self.load_categories()
-        return [
-            app_commands.Choice(name=cat, value=cat)
-            for cat in categories if current.lower() in cat.lower() and cat != "Other"
-        ]
-    
-    # Здесь мы не можем сделать автодополнение для event_name, так как это потребует выбора категории сначала
-
-    @category_group.command(name="list", description="Показать список всех категорий и их ивентов")
-    async def list_categories(self, interaction: discord.Interaction):
-        """Выводит список всех категорий и содержащихся в них ивентов."""
-        categories = self.load_categories()
-        if not categories:
-            await interaction.response.send_message("Категории еще не созданы.", ephemeral=True)
-            return
-
-        embed = discord.Embed(title="📋 Список категорий и ивентов", color=discord.Color.blue())
         
-        # Сортируем категории, чтобы 'Other' была в конце
-        sorted_categories = sorted(categories.items(), key=lambda item: item[0] == "Other")
+        if ивент in self.categories[категория]:
+            await interaction.response.send_message(f"Ивент '{ивент}' уже есть в категории '{категория}'.", ephemeral=True)
+        else:
+            self.categories[категория].append(ивент)
+            self._save_json()
+            await interaction.response.send_message(f"Ивент '{ивент}' успешно добавлен в категорию '{категория}'.", ephemeral=True)
+
+    @category.command(name="remove", description="Удалить ивент из категории.")
+    @app_commands.describe(категория="Категория, из которой удаляем", ивент="Название ивента")
+    async def remove(self, interaction: discord.Interaction, категория: str, ивент: str):
+        self.categories = self._load_json()
+        if категория not in self.categories:
+            await interaction.response.send_message(f"Категория '{категория}' не найдена.", ephemeral=True)
+            return
         
-        for category, events in sorted_categories:
-            event_list = ", ".join(f"`{event}`" for event in events) if events else "Пусто"
+        if ивент not in self.categories[категория]:
+            await interaction.response.send_message(f"Ивент '{ивент}' не найден в категории '{категория}'.", ephemeral=True)
+        else:
+            self.categories[категория].remove(ивент)
+            self._save_json()
+            await interaction.response.send_message(f"Ивент '{ивент}' успешно удален из категории '{категория}'.", ephemeral=True)
+
+    @category.command(name="list", description="Показать список всех категорий и их ивентов.")
+    async def list(self, interaction: discord.Interaction):
+        self.categories = self._load_json()
+        if not self.categories:
+            await interaction.response.send_message("Нет созданных категорий.", ephemeral=True)
+            return
+
+        embed = discord.Embed(title="Список категорий и ивентов", color=discord.Color.blue())
+        for category, events in self.categories.items():
+            event_list = "\n".join(f"- {event}" for event in events) if events else "Пусто"
             embed.add_field(name=f"📁 {category}", value=event_list, inline=False)
-
+        
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-async def setup(bot):
+async def setup(bot: commands.Bot):
     await bot.add_cog(CategoryCog(bot))
+

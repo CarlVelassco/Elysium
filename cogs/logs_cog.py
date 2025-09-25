@@ -28,15 +28,17 @@ class DateRangeModal(discord.ui.Modal, title='Укажите диапазон д
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
-            # Получаем события из базы данных
-            events = self.cog_instance._get_events_from_db(
-                self.date_range_input.value, self.log_type, 
+            # Получаем события напрямую из истории канала
+            events = await self.cog_instance._get_events_in_range(
+                interaction,
+                self.date_range_input.value, 
+                self.log_type, 
                 user_id=self.user_id,
                 category_name=self.category_name
             )
 
             if not events:
-                await interaction.followup.send("За указанный период не найдено ивентов в базе данных. Попробуйте обновить ее командой /scan.", ephemeral=True)
+                await interaction.followup.send("За указанный период не найдено ивентов.", ephemeral=True)
                 return
 
             log_file = await self.cog_instance.generate_log_file(
@@ -113,7 +115,6 @@ class LogsCog(commands.Cog):
         # Загружаем данные при старте
         self.blum_list = self._load_json('blum_list.json', [])
         self.categories = self._load_json('categories.json', {})
-        self.events_db = self._load_json('events_database.json', {})
 
     def _load_json(self, filename, default_value):
         try:
@@ -144,42 +145,69 @@ class LogsCog(commands.Cog):
             end_date = start_date + timedelta(days=1) - timedelta(seconds=1)
         return start_date, end_date
 
-    def _get_events_from_db(self, date_range_str: str, log_type: str, user_id: int = None, category_name: str = None):
-        """Получает и фильтрует события из загруженной базы данных."""
+    async def _get_events_in_range(self, interaction: discord.Interaction, date_range_str: str, log_type: str, user_id: int = None, category_name: str = None):
+        """Сканирует историю, парсит и фильтрует события в реальном времени."""
         start_time, end_time = self.parse_date_range(date_range_str)
         
-        all_events = list(self.events_db.values())
-        filtered_events = []
+        parse_channel_id = int(os.getenv("PARSE_CHANNEL_ID"))
+        channel = self.bot.get_channel(parse_channel_id)
+        if not channel:
+            await interaction.followup.send("Ошибка: Не удалось найти канал для парсинга.", ephemeral=True)
+            return []
 
-        # 1. Фильтрация по дате
-        for event in all_events:
-            # Преобразуем строку ISO в осведомленный объект datetime
-            event_time = datetime.fromisoformat(event['timestamp']).astimezone(self.moscow_tz)
-            if start_time <= event_time <= end_time:
-                # Добавляем преобразованный datetime для дальнейшей работы
-                event['timestamp_dt'] = event_time
-                filtered_events.append(event)
+        all_events = []
+        async for message in channel.history(limit=None, after=start_time, before=end_time):
+            if not message.embeds:
+                continue
+
+            for embed in message.embeds:
+                if embed.title != "Отчет о проведенном ивенте":
+                    continue
+
+                data = {
+                    'user_id': None, 'user_nick': 'N/A', 'points': 0,
+                    'event_name': 'Без названия',
+                    'timestamp_dt': message.created_at.astimezone(self.moscow_tz)
+                }
+
+                if embed.description:
+                    desc_parts = embed.description.split()
+                    for i, part in enumerate(desc_parts):
+                        if part.startswith('<@') and part.endswith('>'):
+                            try:
+                                data['user_id'] = int(part.replace('<@', '').replace('>', ''))
+                                data['user_nick'] = ' '.join(desc_parts[i+1:]).replace('`', '').strip() or 'N/A'
+                                break
+                            except (ValueError, IndexError): continue
+                
+                for field in embed.fields:
+                    clean_field_name = field.name.lower().replace('>', '').strip()
+                    if clean_field_name == 'получено':
+                        try: data['points'] = int(field.value.replace('`', '').split()[0])
+                        except (ValueError, IndexError): continue
+                    elif clean_field_name == 'ивент':
+                        data['event_name'] = field.value.replace('`', '').strip()
+
+                if data['points'] > 0 and data['user_id'] is not None:
+                    all_events.append(data)
         
-        # 2. Фильтрация для ночного лога
+        # --- Фильтрация ---
+        filtered_events = all_events
+
         if log_type == 'night_log':
             night_events = []
             for event in filtered_events:
                 end_time_event = event['timestamp_dt']
                 start_time_event = end_time_event - timedelta(minutes=event['points'])
-                
                 night_start_boundary = end_time_event.replace(hour=3, minute=0, second=0, microsecond=0)
                 night_end_boundary = end_time_event.replace(hour=7, minute=0, second=0, microsecond=0)
-                
-                # Проверяем пересечение интервалов
                 if start_time_event < night_end_boundary and end_time_event > night_start_boundary:
                     night_events.append(event)
             filtered_events = night_events
 
-        # 3. Фильтрация по пользователю
         if user_id:
             filtered_events = [e for e in filtered_events if e['user_id'] == user_id]
 
-        # 4. Присвоение категорий
         self.categories = self._load_json('categories.json', {})
         for event in filtered_events:
             event['category'] = 'Other'
@@ -188,7 +216,6 @@ class LogsCog(commands.Cog):
                     event['category'] = cat
                     break
         
-        # 5. Фильтрация по категории
         if category_name:
              filtered_events = [e for e in filtered_events if e['category'] == category_name]
 
@@ -242,74 +269,13 @@ class LogsCog(commands.Cog):
 
     # --- Команды ---
 
-    @app_commands.command(name="scan", description="Сканирует историю и обновляет базу данных ивентов.")
-    @app_commands.guild_only()
-    @app_commands.default_permissions(manage_guild=True)
-    async def scan(self, interaction: discord.Interaction, date_range: str):
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        
-        try:
-            start_time, end_time = self.parse_date_range(date_range)
-        except ValueError as e:
-            await interaction.followup.send(f"Ошибка: {e}", ephemeral=True)
-            return
-
-        parse_channel_id = int(os.getenv("PARSE_CHANNEL_ID"))
-        channel = self.bot.get_channel(parse_channel_id)
-        if not channel:
-            await interaction.followup.send("Ошибка: Не удалось найти канал для парсинга.", ephemeral=True)
-            return
-        
-        new_events_count = 0
-        async for message in channel.history(limit=None, after=start_time, before=end_time):
-            if str(message.id) in self.events_db:
-                continue # Пропускаем уже известные события
-            
-            if not message.embeds:
-                continue
-
-            for embed in message.embeds:
-                if embed.title != "Отчет о проведенном ивенте":
-                    continue
-
-                data = {'message_id': str(message.id), 'user_id': None, 'user_nick': 'N/A', 'points': 0, 'event_name': 'Без названия', 'timestamp': message.created_at.isoformat()}
-                
-                if embed.description:
-                    desc_parts = embed.description.split()
-                    for i, part in enumerate(desc_parts):
-                        if part.startswith('<@') and part.endswith('>'):
-                            try:
-                                data['user_id'] = int(part.replace('<@', '').replace('>', ''))
-                                data['user_nick'] = ' '.join(desc_parts[i+1:]).replace('`', '').strip() or 'N/A'
-                                break
-                            except (ValueError, IndexError): continue
-                
-                for field in embed.fields:
-                    clean_field_name = field.name.lower().replace('>', '').strip()
-                    if clean_field_name == 'получено':
-                        try:
-                            data['points'] = int(field.value.replace('`', '').split()[0])
-                        except (ValueError, IndexError): continue
-                    elif clean_field_name == 'ивент':
-                        data['event_name'] = field.value.replace('`', '').strip()
-
-                if data['points'] > 0 and data['user_id'] is not None:
-                    self.events_db[str(message.id)] = data
-                    new_events_count += 1
-        
-        if new_events_count > 0:
-            self._save_json('events_database.json', self.events_db)
-        
-        await interaction.followup.send(f"Сканирование завершено. Найдено и добавлено {new_events_count} новых ивентов в базу.", ephemeral=True)
-
-
-    @app_commands.command(name="logs", description="Общий лог за дату или период из базы данных.")
+    @app_commands.command(name="logs", description="Общий лог за дату или период.")
     @app_commands.guild_only()
     async def logs(self, interaction: discord.Interaction):
         modal = DateRangeModal(category_name=None, log_type='general', user_id=None, cog_instance=self)
         await interaction.response.send_modal(modal)
 
-    @app_commands.command(name="log", description="Лог категории за дату или период из базы данных.")
+    @app_commands.command(name="log", description="Лог категории за дату или период.")
     @app_commands.guild_only()
     async def log(self, interaction: discord.Interaction, категория: str):
         self.categories = self._load_json('categories.json', {})
@@ -319,13 +285,13 @@ class LogsCog(commands.Cog):
         modal = DateRangeModal(category_name=категория, log_type='category', user_id=None, cog_instance=self)
         await interaction.response.send_modal(modal)
 
-    @app_commands.command(name="night_log", description="Лог ночной активности за период из базы данных.")
+    @app_commands.command(name="night_log", description="Лог ночной активности за период.")
     @app_commands.guild_only()
     async def night_log(self, interaction: discord.Interaction):
         modal = DateRangeModal(category_name=None, log_type='night_log', user_id=None, cog_instance=self)
         await interaction.response.send_modal(modal)
 
-    @app_commands.command(name="check", description="Лог активности человека за дату или период из базы данных.")
+    @app_commands.command(name="check", description="Лог активности человека за дату или период.")
     @app_commands.guild_only()
     async def check(self, interaction: discord.Interaction, пользователь: discord.User):
         modal = DateRangeModal(category_name=None, log_type='check', user_id=пользователь.id, cog_instance=self)

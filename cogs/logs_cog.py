@@ -59,6 +59,14 @@ class MakserSelect(discord.ui.Select):
     def __init__(self, cog_instance):
         self.cog = cog_instance
         options = []
+        
+        # Добавляем опцию "Общий" в самое начало
+        options.append(discord.SelectOption(
+            label="Общий", 
+            value="__all__", 
+            description="Суммарный отчет по всем категориям"
+        ))
+
         try:
             categories_data = self.cog._load_json(self.cog.categories_file, {})
             categories = list(categories_data.keys())
@@ -70,8 +78,9 @@ class MakserSelect(discord.ui.Select):
         except Exception as e:
             print(f"Ошибка загрузки категорий для MakserSelect: {e}")
 
-        if not options:
-            options = [discord.SelectOption(label="Категории не найдены", value="disabled", description="Создайте категории командой /category create")]
+        if len(options) == 1: # Если есть только "Общий", значит категорий нет
+             options.append(discord.SelectOption(label="Категории не найдены", value="disabled", description="Создайте категории командой /category create"))
+
 
         super().__init__(
             placeholder="Выберите категорию для отчета...", min_values=1, max_values=1, options=options,
@@ -170,9 +179,10 @@ class LogsCog(commands.Cog):
             for event in filtered_events:
                 end_time_event = event['timestamp_dt']
                 start_time_event = end_time_event - timedelta(minutes=event['points'])
-                night_start_boundary = end_time_event.replace(hour=3, minute=0, second=0, microsecond=0)
-                night_end_boundary = end_time_event.replace(hour=7, minute=0, second=0, microsecond=0)
-                # Проверяем, есть ли пересечение временного отрезка ивента с ночным промежутком
+                # Используем самый широкий диапазон (Blum) для первоначальной фильтрации
+                night_start_boundary = end_time_event.replace(hour=2, minute=0, second=0, microsecond=0)
+                night_end_boundary = end_time_event.replace(hour=8, minute=0, second=0, microsecond=0)
+                # Проверяем, есть ли пересечение временного отрезка ивента с общим ночным промежутком
                 if start_time_event < night_end_boundary and end_time_event > night_start_boundary:
                     night_events.append(event)
             filtered_events = night_events
@@ -188,7 +198,8 @@ class LogsCog(commands.Cog):
                     event['category'] = cat
                     break
         
-        if category_name:
+        # Фильтруем по категории, только если это не "Общий" отчет
+        if category_name and category_name != "__all__":
              filtered_events = [e for e in filtered_events if e['category'] == category_name]
 
         return sorted(filtered_events, key=lambda x: x['timestamp_dt'])
@@ -198,7 +209,11 @@ class LogsCog(commands.Cog):
         buffer = io.StringIO()
         total_points = 0
         if log_type == 'makser':
-            buffer.write(f"Суммарный отчет по категории '{category_name}' за {date_range_str}\n\n")
+            if category_name == "__all__":
+                buffer.write(f"Общий суммарный отчет за {date_range_str}\n\n")
+            else:
+                buffer.write(f"Суммарный отчет по категории '{category_name}' за {date_range_str}\n\n")
+                
             user_points = {}
             for event in events:
                 user_id = event['user_id']
@@ -210,6 +225,7 @@ class LogsCog(commands.Cog):
             for i, (user_id, points) in enumerate(sorted_users, 1):
                 buffer.write(f"{i}. {user_id} - {points} баллов\n")
         else:
+            blum_list = self._load_json(self.blum_file, [])
             for event in events:
                 end_time = event['timestamp_dt']
                 start_time = end_time - timedelta(minutes=event['points'])
@@ -218,17 +234,26 @@ class LogsCog(commands.Cog):
                 night_bonus_info = ""
 
                 if log_type == 'night_log':
-                    night_start = end_time.replace(hour=3, minute=0, second=0, microsecond=0)
-                    night_end = end_time.replace(hour=7, minute=0, second=0, microsecond=0)
+                    is_blum = event['user_id'] in blum_list
+                    
+                    # Определяем временные рамки и множитель в зависимости от роли
+                    if is_blum:
+                        night_start = end_time.replace(hour=2, minute=0, second=0, microsecond=0)
+                        night_end = end_time.replace(hour=8, minute=0, second=0, microsecond=0)
+                        multiplier = 2.0
+                    else:
+                        night_start = end_time.replace(hour=3, minute=0, second=0, microsecond=0)
+                        night_end = end_time.replace(hour=7, minute=0, second=0, microsecond=0)
+                        multiplier = 1.5
+
+                    # Рассчитываем пересечение времени ивента с его персональным ночным бонусом
                     actual_start = max(start_time, night_start)
                     actual_end = min(end_time, night_end)
                     bonus_minutes = 0
                     if actual_end > actual_start:
                         bonus_minutes = round((actual_end - actual_start).total_seconds() / 60)
+                    
                     if bonus_minutes > 0:
-                        blum_list = self._load_json(self.blum_file, [])
-                        is_blum = event['user_id'] in blum_list
-                        multiplier = 2.0 if is_blum else 1.5
                         bonus_points = round(bonus_minutes * (multiplier - 1.0))
                         night_bonus_info = f"({multiplier}x) +{bonus_points} | "
                         total_points += bonus_points

@@ -3,6 +3,7 @@ from discord.ext import commands
 import os
 from dotenv import load_dotenv
 import asyncio
+from discord import app_commands
 
 # --- Загрузка переменных окружения ---
 load_dotenv()

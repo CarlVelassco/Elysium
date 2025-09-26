@@ -224,6 +224,34 @@ class LogsCog(commands.Cog):
             sorted_users = sorted(user_points.items(), key=lambda item: item[1], reverse=True)
             for i, (user_id, points) in enumerate(sorted_users, 1):
                 buffer.write(f"{i}. {user_id} - {points} баллов\n")
+        
+        elif log_type == 'eventstats':
+            buffer.write(f"Статистика по ивентам за {date_range_str}\n\n")
+            
+            event_stats = {}
+            for event in events:
+                name = event['event_name']
+                points = event['points']
+                category = event['category']
+                if name not in event_stats:
+                    event_stats[name] = {'count': 0, 'points': 0, 'category': category}
+                event_stats[name]['count'] += 1
+                event_stats[name]['points'] += points
+
+            stats_by_category = {}
+            for name, data in event_stats.items():
+                category = data['category']
+                if category not in stats_by_category:
+                    stats_by_category[category] = []
+                stats_by_category[category].append({'name': name, 'count': data['count'], 'points': data['points']})
+
+            sorted_categories = sorted(stats_by_category.keys())
+            for category in sorted_categories:
+                buffer.write(f"--- Категория: {category} ---\n")
+                sorted_events = sorted(stats_by_category[category], key=lambda x: x['name'])
+                for event_data in sorted_events:
+                    buffer.write(f"{event_data['name']} | {event_data['count']} | {event_data['points']}\n")
+                buffer.write("\n")
         else:
             blum_list = self._load_json(self.blum_file, [])
             for event in events:
@@ -236,7 +264,6 @@ class LogsCog(commands.Cog):
                 if log_type == 'night_log':
                     is_blum = event['user_id'] in blum_list
                     
-                    # Определяем временные рамки и множитель в зависимости от роли
                     if is_blum:
                         night_start = end_time.replace(hour=2, minute=0, second=0, microsecond=0)
                         night_end = end_time.replace(hour=8, minute=0, second=0, microsecond=0)
@@ -246,7 +273,6 @@ class LogsCog(commands.Cog):
                         night_end = end_time.replace(hour=7, minute=0, second=0, microsecond=0)
                         multiplier = 1.5
 
-                    # Рассчитываем пересечение времени ивента с его персональным ночным бонусом
                     actual_start = max(start_time, night_start)
                     actual_end = min(end_time, night_end)
                     bonus_minutes = 0
@@ -262,9 +288,10 @@ class LogsCog(commands.Cog):
                 buffer.write(line)
                 total_points += current_points
         
-        buffer.write(f"\nИтог: {total_points} баллов")
+        if log_type != 'eventstats':
+            buffer.write(f"\nИтог: {total_points} баллов")
+
         buffer.seek(0)
-        # Очистка имени файла от недопустимых символов
         safe_date_range = re.sub(r'[<>:"/\\|?*]', '_', date_range_str)
         filename = f"log_{log_type}_{safe_date_range}.txt"
         return discord.File(buffer, filename=filename)
@@ -307,6 +334,12 @@ class LogsCog(commands.Cog):
         except Exception as e:
             print(f"Критическая ошибка при создании вида для команды /makser: {e}")
             await interaction.response.send_message("Произошла ошибка при отображении панели.", ephemeral=True)
+
+    @app_commands.command(name="eventstats", description="Статистика по ивентам за период.")
+    @app_commands.guild_only()
+    async def eventstats(self, interaction: discord.Interaction):
+        modal = DateRangeModal(category_name=None, log_type='eventstats', user_id=None, cog_instance=self)
+        await interaction.response.send_modal(modal)
 
     @app_commands.command(name="clear", description="Очищает историю текущего канала.")
     @app_commands.guild_only()

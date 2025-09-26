@@ -1,9 +1,10 @@
 import discord
-from discord import app_commands
+from discord import app_commands  # <-- Добавлен этот импорт
 from discord.ext import commands
 import json
 import os
-from main import is_admin # Импортируем наш декоратор для проверки прав
+from main import is_admin  # Импортируем наш декоратор для проверки прав
+
 
 class CategoryCog(commands.Cog):
     def __init__(self, bot):
@@ -31,7 +32,7 @@ class CategoryCog(commands.Cog):
 
     @category_group.command(name="create", description="Создать новую категорию.")
     @app_commands.guild_only()
-    @is_admin() # <-- Проверка прав
+    @is_admin()  # <-- Проверка прав
     async def create_category(self, interaction: discord.Interaction, название: str):
         categories = self._load_categories()
         if название in categories:
@@ -43,7 +44,7 @@ class CategoryCog(commands.Cog):
 
     @category_group.command(name="delete", description="Удалить существующую категорию.")
     @app_commands.guild_only()
-    @is_admin() # <-- Проверка прав
+    @is_admin()  # <-- Проверка прав
     async def delete_category(self, interaction: discord.Interaction, название: str):
         categories = self._load_categories()
         if название not in categories:
@@ -55,36 +56,40 @@ class CategoryCog(commands.Cog):
 
     @category_group.command(name="add", description="Добавить ивент в категорию.")
     @app_commands.guild_only()
-    @is_admin() # <-- Проверка прав
+    @is_admin()  # <-- Проверка прав
     async def add_to_category(self, interaction: discord.Interaction, категория: str, ивент: str):
         categories = self._load_categories()
         if категория not in categories:
             await interaction.response.send_message(f"Категория '{категория}' не найдена.", ephemeral=True)
         else:
             if ивент in categories[категория]:
-                await interaction.response.send_message(f"Ивент '{ивент}' уже находится в категории '{категория}'.", ephemeral=True)
+                await interaction.response.send_message(f"Ивент '{ивент}' уже находится в категории '{категория}'.",
+                                                      ephemeral=True)
             else:
                 categories[категория].append(ивент)
                 self._save_categories(categories)
-                await interaction.response.send_message(f"Ивент '{ивент}' успешно добавлен в категорию '{категория}'.", ephemeral=True)
+                await interaction.response.send_message(
+                    f"Ивент '{ивент}' успешно добавлен в категорию '{категория}'.", ephemeral=True)
 
     @category_group.command(name="remove", description="Удалить ивент из категории.")
     @app_commands.guild_only()
-    @is_admin() # <-- Проверка прав
+    @is_admin()  # <-- Проверка прав
     async def remove_from_category(self, interaction: discord.Interaction, категория: str, ивент: str):
         categories = self._load_categories()
         if категория not in categories:
             await interaction.response.send_message(f"Категория '{категория}' не найдена.", ephemeral=True)
         elif ивент not in categories[категория]:
-            await interaction.response.send_message(f"Ивент '{ивент}' не найден в категории '{категория}'.", ephemeral=True)
+            await interaction.response.send_message(f"Ивент '{ивент}' не найден в категории '{категория}'.",
+                                                      ephemeral=True)
         else:
             categories[категория].remove(ивент)
             self._save_categories(categories)
-            await interaction.response.send_message(f"Ивент '{ивент}' успешно удален из категории '{категория}'.", ephemeral=True)
+            await interaction.response.send_message(f"Ивент '{ивент}' успешно удален из категории '{категория}'.",
+                                                      ephemeral=True)
 
     @category_group.command(name="list", description="Показать список всех категорий и их ивентов.")
     @app_commands.guild_only()
-    @is_admin() # <-- Проверка прав
+    @is_admin()  # <-- Проверка прав
     async def list_categories(self, interaction: discord.Interaction):
         categories = self._load_categories()
         if not categories:
@@ -95,10 +100,12 @@ class CategoryCog(commands.Cog):
         for name, events in categories.items():
             event_list = "\n".join(f"- {event}" for event in events) if events else "Пусто"
             embed.add_field(name=f"Категория: {name}", value=event_list, inline=False)
-        
+
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
 
 async def setup(bot: commands.Bot):
     cog = CategoryCog(bot)
+    # Групповые команды нужно добавлять в дерево команд бота напрямую
     bot.tree.add_command(cog.category_group)
 

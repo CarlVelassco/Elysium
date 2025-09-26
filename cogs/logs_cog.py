@@ -1,5 +1,5 @@
 import discord
-from discord import app_commands
+from discord import app_commands  # <-- Добавлен этот импорт
 from discord.ext import commands
 import os
 import io
@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import pytz
 import json
 import re
-from main import is_admin # Импортируем наш декоратор
+from main import is_admin  # Импортируем наш декоратор
 
 # --- Вспомогательные классы для UI ---
 
@@ -29,7 +29,7 @@ class DateRangeModal(discord.ui.Modal, title='Укажите диапазон д
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             events = await self.cog_instance._get_events_in_range(
-                interaction, self.date_range_input.value, self.log_type, 
+                interaction, self.date_range_input.value, self.log_type,
                 user_id=self.user_id, category_name=self.category_name
             )
             if not events:
@@ -39,16 +39,18 @@ class DateRangeModal(discord.ui.Modal, title='Укажите диапазон д
             log_file = await self.cog_instance.generate_log_file(
                 events, self.date_range_input.value, self.log_type, category_name=self.category_name
             )
-            
+
             log_channel_id = int(os.getenv("LOG_CHANNEL_ID"))
             log_channel = self.cog_instance.bot.get_channel(log_channel_id)
 
             if log_channel:
                 await log_channel.send(file=log_file)
                 user_mention = f" для <@{self.user_id}>" if self.user_id else ""
-                await interaction.followup.send(f"Лог{user_mention} успешно создан и отправлен в канал {log_channel.mention}.", ephemeral=True)
+                await interaction.followup.send(f"Лог{user_mention} успешно создан и отправлен в канал {log_channel.mention}.",
+                                                  ephemeral=True)
             else:
-                await interaction.followup.send("Ошибка: Не удалось найти канал для логов. Проверьте LOG_CHANNEL_ID.", ephemeral=True)
+                await interaction.followup.send("Ошибка: Не удалось найти канал для логов. Проверьте LOG_CHANNEL_ID.",
+                                                  ephemeral=True)
 
         except ValueError as e:
             await interaction.followup.send(f"Ошибка: {e}", ephemeral=True)
@@ -56,32 +58,34 @@ class DateRangeModal(discord.ui.Modal, title='Укажите диапазон д
             print(f"Критическая ошибка в модальном окне: {e}")
             await interaction.followup.send("Произошла непредвиденная ошибка при создании лога.", ephemeral=True)
 
+
 class MakserSelect(discord.ui.Select):
     def __init__(self, cog_instance):
         self.cog = cog_instance
         options = []
-        
+
         # Добавляем опцию "Общий" в самое начало
         options.append(discord.SelectOption(
-            label="Общий", 
-            value="__all__", 
+            label="Общий",
+            value="__all__",
             description="Суммарный отчет по всем категориям"
         ))
 
         try:
             categories_data = self.cog._load_json(self.cog.categories_file, {})
             categories = list(categories_data.keys())
-            
-            options.extend([discord.SelectOption(label=name, description=f"Отчет по категории '{name}'") for name in categories])
-            
+
+            options.extend(
+                [discord.SelectOption(label=name, description=f"Отчет по категории '{name}'") for name in categories])
+
             if "Other" not in categories:
                 options.append(discord.SelectOption(label="Other", description="Отчет по ивентам без категории"))
         except Exception as e:
             print(f"Ошибка загрузки категорий для MakserSelect: {e}")
 
-        if len(options) == 1: # Если есть только "Общий", значит категорий нет
-             options.append(discord.SelectOption(label="Категории не найдены", value="disabled", description="Создайте категории командой /category create"))
-
+        if len(options) == 1:  # Если есть только "Общий", значит категорий нет
+            options.append(discord.SelectOption(label="Категории не найдены", value="disabled",
+                                                  description="Создайте категории командой /category create"))
 
         super().__init__(
             placeholder="Выберите категорию для отчета...", min_values=1, max_values=1, options=options,
@@ -93,10 +97,12 @@ class MakserSelect(discord.ui.Select):
         modal = DateRangeModal(category_name=category_name, log_type='makser', user_id=None, cog_instance=self.cog)
         await interaction.response.send_modal(modal)
 
+
 class MakserView(discord.ui.View):
     def __init__(self, cog_instance):
         super().__init__(timeout=300)
         self.add_item(MakserSelect(cog_instance))
+
 
 # --- Основной класс кога ---
 
@@ -120,6 +126,7 @@ class LogsCog(commands.Cog):
     def parse_date_range(self, date_str: str):
         """Парсит строку с датой или диапазоном дат."""
         current_year = datetime.now().year
+
         def parse_date(d_str):
             try:
                 dt_obj = datetime.strptime(f"{d_str.strip()}.{current_year}", '%d.%m.%Y')
@@ -137,10 +144,11 @@ class LogsCog(commands.Cog):
             end_date = start_date + timedelta(days=1)
         return start_date, end_date
 
-    async def _get_events_in_range(self, interaction: discord.Interaction, date_range_str: str, log_type: str, user_id: int = None, category_name: str = None):
+    async def _get_events_in_range(self, interaction: discord.Interaction, date_range_str: str, log_type: str,
+                                   user_id: int = None, category_name: str = None):
         """Основная функция для получения и фильтрации ивентов."""
         start_time, end_time = self.parse_date_range(date_range_str)
-        
+
         parse_channel_id = int(os.getenv("PARSE_CHANNEL_ID"))
         channel = self.bot.get_channel(parse_channel_id)
         if not channel:
@@ -156,7 +164,8 @@ class LogsCog(commands.Cog):
             for embed in message.embeds:
                 if embed.title != "Отчет о проведенном ивенте": continue
 
-                data = {'user_id': None, 'user_nick': 'N/A', 'points': 0, 'event_name': 'Без названия', 'timestamp_dt': message.created_at.astimezone(self.moscow_tz)}
+                data = {'user_id': None, 'user_nick': 'N/A', 'points': 0, 'event_name': 'Без названия',
+                        'timestamp_dt': message.created_at.astimezone(self.moscow_tz)}
                 if embed.description:
                     match = re.search(r'<@(\d+)>', embed.description)
                     if match:
@@ -168,14 +177,16 @@ class LogsCog(commands.Cog):
                 for field in embed.fields:
                     clean_field_name = field.name.lower().replace('>', '').strip()
                     if clean_field_name == 'получено':
-                        try: data['points'] = int(re.search(r'\d+', field.value).group())
-                        except (AttributeError, ValueError, IndexError): continue
+                        try:
+                            data['points'] = int(re.search(r'\d+', field.value).group())
+                        except (AttributeError, ValueError, IndexError):
+                            continue
                     elif clean_field_name == 'ивент':
                         data['event_name'] = field.value.replace('`', '').strip()
-                
+
                 if data['points'] > 0 and data['user_id'] is not None:
                     all_events.append(data)
-        
+
         # --- Фильтрация событий ---
         filtered_events = all_events
         if log_type == 'night_log':
@@ -193,7 +204,7 @@ class LogsCog(commands.Cog):
 
         if user_id:
             filtered_events = [e for e in filtered_events if e['user_id'] == user_id]
-        
+
         categories = self._load_json(self.categories_file, {})
         for event in filtered_events:
             event['category'] = 'Other'
@@ -201,10 +212,10 @@ class LogsCog(commands.Cog):
                 if event['event_name'].lower() in [ev.lower() for ev in event_list]:
                     event['category'] = cat
                     break
-        
+
         # Фильтруем по категории, только если это не "Общий" отчет
         if category_name and category_name != "__all__":
-             filtered_events = [e for e in filtered_events if e['category'] == category_name]
+            filtered_events = [e for e in filtered_events if e['category'] == category_name]
 
         return sorted(filtered_events, key=lambda x: x['timestamp_dt'])
 
@@ -217,21 +228,21 @@ class LogsCog(commands.Cog):
                 buffer.write(f"Общий суммарный отчет за {date_range_str}\n\n")
             else:
                 buffer.write(f"Суммарный отчет по категории '{category_name}' за {date_range_str}\n\n")
-                
+
             user_points = {}
             for event in events:
                 user_id = event['user_id']
                 points = event['points']
                 total_points += points
                 user_points[user_id] = user_points.get(user_id, 0) + points
-            
+
             sorted_users = sorted(user_points.items(), key=lambda item: item[1], reverse=True)
             for i, (user_id, points) in enumerate(sorted_users, 1):
                 buffer.write(f"{i}. {user_id} - {points} баллов\n")
-        
+
         elif log_type == 'eventstats':
             buffer.write(f"Статистика по ивентам за {date_range_str}\n\n")
-            
+
             event_stats = {}
             for event in events:
                 name = event['event_name']
@@ -247,7 +258,8 @@ class LogsCog(commands.Cog):
                 category = data['category']
                 if category not in stats_by_category:
                     stats_by_category[category] = []
-                stats_by_category[category].append({'name': name, 'count': data['count'], 'points': data['points']})
+                stats_by_category[category].append(
+                    {'name': name, 'count': data['count'], 'points': data['points']})
 
             sorted_categories = sorted(stats_by_category.keys())
             for category in sorted_categories:
@@ -267,7 +279,7 @@ class LogsCog(commands.Cog):
 
                 if log_type == 'night_log':
                     is_blum = event['user_id'] in blum_list
-                    
+
                     if is_blum:
                         night_start = end_time.replace(hour=2, minute=0, second=0, microsecond=0)
                         night_end = end_time.replace(hour=8, minute=0, second=0, microsecond=0)
@@ -282,16 +294,16 @@ class LogsCog(commands.Cog):
                     bonus_minutes = 0
                     if actual_end > actual_start:
                         bonus_minutes = round((actual_end - actual_start).total_seconds() / 60)
-                    
+
                     if bonus_minutes > 0:
                         bonus_points = round(bonus_minutes * (multiplier - 1.0))
                         night_bonus_info = f"({multiplier}x) +{bonus_points} | "
                         total_points += bonus_points
-                
+
                 line += f"{current_points} | {night_bonus_info}{event['event_name']} | {event.get('category', 'Other')}\n"
                 buffer.write(line)
                 total_points += current_points
-        
+
         if log_type != 'eventstats':
             buffer.write(f"\nИтог: {total_points} баллов")
 
@@ -329,7 +341,7 @@ class LogsCog(commands.Cog):
     async def check(self, interaction: discord.Interaction, пользователь: discord.User):
         modal = DateRangeModal(category_name=None, log_type='check', user_id=пользователь.id, cog_instance=self)
         await interaction.response.send_modal(modal)
-    
+
     @app_commands.command(name="makser", description="Показывает панель для создания суммарного отчета по категориям.")
     @app_commands.guild_only()
     async def makser(self, interaction: discord.Interaction):
@@ -349,16 +361,18 @@ class LogsCog(commands.Cog):
     # Эта команда теперь только для администраторов
     @app_commands.command(name="clear", description="Очищает историю текущего канала.")
     @app_commands.guild_only()
-    @is_admin() # <-- Проверка прав
+    @is_admin()  # <-- Проверка прав
     async def clear(self, interaction: discord.Interaction, количество: discord.app_commands.Range[int, 1, 100] = 100):
         await interaction.response.defer(ephemeral=True)
         try:
             deleted = await interaction.channel.purge(limit=количество)
             await interaction.followup.send(f"Удалено {len(deleted)} сообщений.", ephemeral=True)
         except discord.Forbidden:
-            await interaction.followup.send("Ошибка: У меня нет прав для удаления сообщений в этом канале.", ephemeral=True)
+            await interaction.followup.send("Ошибка: У меня нет прав для удаления сообщений в этом канале.",
+                                              ephemeral=True)
         except discord.HTTPException as e:
             await interaction.followup.send(f"Произошла ошибка при удалении сообщений: {e}", ephemeral=True)
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(LogsCog(bot))

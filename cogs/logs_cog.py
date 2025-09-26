@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import pytz
 import json
 import re
+from main import is_admin # Импортируем наш декоратор
 
 # --- Вспомогательные классы для UI ---
 
@@ -143,7 +144,10 @@ class LogsCog(commands.Cog):
         parse_channel_id = int(os.getenv("PARSE_CHANNEL_ID"))
         channel = self.bot.get_channel(parse_channel_id)
         if not channel:
-            await interaction.followup.send("Ошибка: Не удалось найти канал для парсинга.", ephemeral=True)
+            if interaction.is_response():
+                await interaction.followup.send("Ошибка: Не удалось найти канал для парсинга.", ephemeral=True)
+            else:
+                await interaction.response.send_message("Ошибка: Не удалось найти канал для парсинга.", ephemeral=True)
             return []
 
         all_events = []
@@ -297,6 +301,7 @@ class LogsCog(commands.Cog):
         return discord.File(buffer, filename=filename)
 
     # --- Команды ---
+    # Эти команды теперь доступны всем
     @app_commands.command(name="logs", description="Общий лог за дату или период.")
     @app_commands.guild_only()
     async def logs(self, interaction: discord.Interaction):
@@ -341,9 +346,10 @@ class LogsCog(commands.Cog):
         modal = DateRangeModal(category_name=None, log_type='eventstats', user_id=None, cog_instance=self)
         await interaction.response.send_modal(modal)
 
+    # Эта команда теперь только для администраторов
     @app_commands.command(name="clear", description="Очищает историю текущего канала.")
     @app_commands.guild_only()
-    @app_commands.default_permissions(manage_messages=True)
+    @is_admin() # <-- Проверка прав
     async def clear(self, interaction: discord.Interaction, количество: discord.app_commands.Range[int, 1, 100] = 100):
         await interaction.response.defer(ephemeral=True)
         try:

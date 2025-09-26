@@ -4,83 +4,84 @@ import os
 from dotenv import load_dotenv
 import asyncio
 
-# --- Настройка ---
-# Загружаем переменные окружения из .env файла
+# --- Загрузка переменных окружения ---
 load_dotenv()
-TOKEN = os.getenv('DISCORD_TOKEN')
-PARSE_CHANNEL_ID = os.getenv('PARSE_CHANNEL_ID')
-LOG_CHANNEL_ID = os.getenv('LOG_CHANNEL_ID')
 
-# Проверяем, что все переменные окружения заданы
-if not all([TOKEN, PARSE_CHANNEL_ID, LOG_CHANNEL_ID]):
-    print("Ошибка: Не все переменные окружения (DISCORD_TOKEN, PARSE_CHANNEL_ID, LOG_CHANNEL_ID) заданы.")
-    print("Пожалуйста, создайте или проверьте ваш .env файл или переменные на хостинге.")
+TOKEN = os.getenv('DISCORD_TOKEN')
+ADMIN_ROLE_ID = os.getenv('ADMIN_ROLE_ID') # Новая переменная для ID роли администратора
+
+# Проверка наличия обязательных переменных
+if not all([TOKEN, os.getenv('PARSE_CHANNEL_ID'), os.getenv('LOG_CHANNEL_ID'), ADMIN_ROLE_ID]):
+    print("Ошибка: Одна или несколько обязательных переменных окружения не установлены.")
+    print("Убедитесь, что DISCORD_TOKEN, PARSE_CHANNEL_ID, LOG_CHANNEL_ID и ADMIN_ROLE_ID заданы в .env файле.")
     exit()
 
-# Определяем намерения (Intents) - разрешения, которые нужны боту
+# --- Настройка намерений (Intents) ---
 intents = discord.Intents.default()
-intents.message_content = True # Необходимо для чтения содержимого сообщений
-intents.members = True       # Необходимо для получения информации о пользователях сервера
+intents.message_content = True # Необходимо для некоторых операций
+intents.members = True # Необходимо для доступа к информации об участниках
 
+# --- Класс кастомного бота ---
 class MyBot(commands.Bot):
-    """
-    Основной класс бота, наследуемый от commands.Bot.
-    При инициализации он создает путь к постоянному хранилищу, 
-    который будет использоваться всеми когами.
-    """
-    def __init__(self):
-        super().__init__(command_prefix="!", intents=intents)
-        # Путь к постоянному хранилищу данных (для хостинга с Volume)
-        self.data_path = '/data'
-        # Убедимся, что директория существует при запуске. Если нет - создаем.
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Путь для сохранения данных. На Railway это будет /data
+        self.data_path = os.environ.get('RAILWAY_VOLUME_MOUNT_PATH', '.')
+        print(f"Путь для сохранения данных: {self.data_path}")
+        # Создаем директорию, если она не существует
         os.makedirs(self.data_path, exist_ok=True)
-
-    async def setup_hook(self):
-        """Выполняется при запуске бота для загрузки модулей (когов)."""
-        initial_extensions = [
+        self.initial_cogs = [
             'cogs.category_cog',
             'cogs.blum_cog',
-            'cogs.logs_cog'
+            'cogs.logs_cog',
+            'cogs.help_cog' # Новый ког для команды /help
         ]
-        for extension in initial_extensions:
+
+    async def setup_hook(self):
+        """Выполняется при запуске бота для загрузки когов."""
+        for cog in self.initial_cogs:
             try:
-                await self.load_extension(extension)
-                print(f"Ког '{extension.split('.')[-1]}' успешно загружен.")
+                await self.load_extension(cog)
+                print(f"Ког '{cog.split('.')[-1]}' успешно загружен.")
             except Exception as e:
-                print(f"Не удалось загрузить ког '{extension.split('.')[-1]}': {e}")
-        
-        # Синхронизируем слэш-команды с Discord
+                print(f"Не удалось загрузить ког '{cog.split('.')[-1]}': {e}")
+    
+    async def on_ready(self):
+        """Вызывается, когда бот готов к работе."""
+        print(f'Бот {self.user} успешно запущен!')
         try:
+            # Синхронизация команд с Discord
             synced = await self.tree.sync()
             print(f"Синхронизировано {len(synced)} команд.")
         except Exception as e:
             print(f"Ошибка при синхронизации команд: {e}")
 
-    async def on_ready(self):
-        """Событие, которое выполняется, когда бот успешно подключился к Discord."""
-        print(f'Бот {self.user} ({self.user.id}) успешно запущен!')
-        await self.change_presence(activity=discord.Game(name="Анализирую логи"))
+# --- Вспомогательная функция для проверки прав администратора ---
+def is_admin():
+    """Проверяет, имеет ли пользователь необходимую роль для выполнения команды."""
+    async def predicate(interaction: discord.Interaction) -> bool:
+        # Получаем объект роли по ID
+        admin_role = interaction.guild.get_role(int(ADMIN_ROLE_ID))
+        if admin_role is None:
+            await interaction.response.send_message("Ошибка конфигурации: Роль администратора не найдена на сервере.", ephemeral=True)
+            return False
+            
+        # Проверяем, есть ли у пользователя эта роль
+        if admin_role in interaction.user.roles:
+            return True
+        else:
+            await interaction.response.send_message("У вас нет прав для выполнения этой команды.", ephemeral=True)
+            return False
+    return app_commands.check(predicate)
 
-
+# --- Основная функция для запуска ---
 async def main():
-    """Основная асинхронная функция для запуска бота."""
-    bot = MyBot()
-    async with bot:
-        await bot.start(TOKEN)
+    bot = MyBot(command_prefix="!", intents=intents)
+    await bot.start(TOKEN)
 
-# --- Точка входа ---
 if __name__ == "__main__":
     try:
         asyncio.run(main())
-    except TypeError as e:
-        if "received NoneType instead" in str(e):
-            print("\nКРИТИЧЕСКАЯ ОШИБКА: Токен не найден.")
-            print("Убедитесь, что переменная DISCORD_TOKEN правильно установлена в .env файле или на хостинге.\n")
-        else:
-            raise e
-    except discord.errors.LoginFailure:
-        print("\nКРИТИЧЕСКАЯ ОШИБКА: Неверный токен.")
-        print("Пожалуйста, проверьте правильность токена в .env файле или на хостинге.\n")
     except Exception as e:
-        print(f"Произошла непредвиденная ошибка при запуске бота: {e}")
+        print(f"Критическая ошибка при запуске бота: {e}")
 

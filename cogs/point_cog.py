@@ -7,6 +7,7 @@ import uuid
 from datetime import datetime
 import pytz
 import re
+import asyncio
 from main import is_admin
 
 # --- UI для /point add (создание новой записи) ---
@@ -44,69 +45,89 @@ class PointAddModal(discord.ui.Modal, title='Начисление баллов')
         except Exception as e:
             await interaction.response.send_message(f"Произошла непредвиденная ошибка: {e}", ephemeral=True)
 
-# --- UI для /point edit (присвоение баллов ивенту с 0 баллов) ---
-class EditZeroPointEventModal(discord.ui.Modal):
-    def __init__(self, cog_instance, event_data):
-        title = f"Баллы для: {event_data['event_name']}"
-        if len(title) > 45: title = title[:42] + "..."
-        super().__init__(title=title)
-        
+# --- UI для /point edit (изменение баллов существующего ивента) ---
+class EditEventSelect(discord.ui.Select):
+    def __init__(self, bot, cog_instance, entries):
+        self.bot = bot
         self.cog = cog_instance
-        self.event_data = event_data
-
-        self.event_name_display = discord.ui.TextInput(label="Ивент", default=self.event_data['event_name'], disabled=True)
-        self.add_item(self.event_name_display)
-
-        self.points_input = discord.ui.TextInput(label="Количество баллов для начисления", placeholder="Введите целое число", required=True)
-        self.add_item(self.points_input)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        try:
-            new_points = int(self.points_input.value)
-            if new_points <= 0:
-                await interaction.response.send_message("Ошибка: Количество баллов должно быть положительным.", ephemeral=True)
-                return
-
-            entry = {
-                "entry_id": str(uuid.uuid4()), "user_id": self.event_data['user_id'], "points": new_points,
-                "event_name": self.event_data['event_name'], "end_time_iso": self.event_data['timestamp_dt'].isoformat(),
-                "adder_id": interaction.user.id, "adder_name": interaction.user.display_name,
-                "source_message_id": self.event_data['message_id']
-            }
-            self.cog.add_point_entry(entry)
-            await interaction.response.send_message(f"Баллы ({new_points}) успешно начислены за ивент '{self.event_data['event_name']}'.", ephemeral=True)
-        except ValueError:
-            await interaction.response.send_message("Ошибка: Баллы должны быть целым числом.", ephemeral=True)
-        except Exception as e:
-            await interaction.response.send_message(f"Произошла ошибка: {e}", ephemeral=True)
-
-class EditZeroPointEventSelect(discord.ui.Select):
-    def __init__(self, cog_instance, entries):
-        self.cog = cog_instance
-        self.events_map = {str(entry['message_id']): entry for entry in entries}
+        self.events_map = {entry['unique_id']: entry for entry in entries}
         
         options = []
         if not entries:
-            options.append(discord.SelectOption(label="Ивенты с 0 баллов не найдены.", value="disabled"))
+            options.append(discord.SelectOption(label="Ивенты не найдены.", value="disabled"))
         else:
             for entry in entries:
                 end_dt = entry['timestamp_dt']
-                label = f"{entry['event_name']}"
+                label = f"{entry['event_name']} | {entry['points']} баллов"
+                if len(label) > 100: label = label[:97] + "..."
                 description = f"Время: {end_dt.strftime('%H:%M %d.%m.%Y')}"
-                options.append(discord.SelectOption(label=label, value=str(entry['message_id']), description=description))
+                options.append(discord.SelectOption(label=label, value=entry['unique_id'], description=description))
 
-        super().__init__(placeholder="Выберите ивент для начисления баллов...", options=options, disabled=(not entries))
+        super().__init__(placeholder="Выберите ивент для редактирования...", options=options, disabled=(not entries))
 
     async def callback(self, interaction: discord.Interaction):
-        entry_id = self.values[0]
-        entry = self.events_map[entry_id]
-        modal = EditZeroPointEventModal(self.cog, entry)
-        await interaction.response.send_modal(modal)
+        # Отключаем select, чтобы избежать повторных нажатий
+        self.disabled = True
+        await interaction.message.edit(view=self.view)
 
-class EditZeroPointEventView(discord.ui.View):
-    def __init__(self, cog_instance, entries):
+        selected_event_id = self.values[0]
+        event_data = self.events_map[selected_event_id]
+        
+        # Отправляем ephemeral followup, чтобы убрать "ошибку взаимодействия"
+        await interaction.response.send_message("Ожидание ввода...", ephemeral=True, delete_after=1)
+        
+        prompt_msg = await interaction.channel.send(
+            f"{interaction.user.mention}, введите новое количество баллов для ивента **'{event_data['event_name']}'**."
+        )
+
+        def check(m):
+            return m.author == interaction.user and m.channel == interaction.channel
+
+        try:
+            response_msg = await self.bot.wait_for('message', check=check, timeout=60.0)
+            new_points = int(response_msg.content)
+
+            # Удаляем старую запись
+            self.cog.remove_point_entry(event_data['unique_id'])
+            
+            # Создаем новую запись
+            entry = {
+                "entry_id": str(uuid.uuid4()),
+                "user_id": event_data['user_id'],
+                "points": new_points,
+                "event_name": event_data['event_name'],
+                "end_time_iso": event_data['timestamp_dt'].isoformat(),
+                "adder_id": interaction.user.id,
+                "adder_name": interaction.user.display_name,
+                "source_message_id": event_data.get('message_id')
+            }
+            self.cog.add_point_entry(entry)
+
+            await interaction.followup.send(f"Баллы для ивента '{event_data['event_name']}' изменены на {new_points}.", ephemeral=True)
+            
+            # Удаляем сообщения
+            try:
+                await prompt_msg.delete()
+                await response_msg.delete()
+            except discord.HTTPException:
+                pass # Если сообщения уже удалены, ничего страшного
+
+        except asyncio.TimeoutError:
+            await interaction.followup.send("Время на ввод истекло.", ephemeral=True)
+            try: await prompt_msg.delete()
+            except discord.HTTPException: pass
+        except ValueError:
+            await interaction.followup.send("Ошибка: Введено не число.", ephemeral=True)
+            try: await prompt_msg.delete()
+            except discord.HTTPException: pass
+        except Exception as e:
+            print(f"Ошибка в /point edit callback: {e}")
+            await interaction.followup.send("Произошла непредвиденная ошибка.", ephemeral=True)
+
+class EditEventView(discord.ui.View):
+    def __init__(self, bot, cog_instance, entries):
         super().__init__(timeout=300)
-        self.add_item(EditZeroPointEventSelect(cog_instance, entries))
+        self.add_item(EditEventSelect(bot, cog_instance, entries))
 
 # --- UI для /point remove ---
 class PointRemoveSelect(discord.ui.Select):
@@ -125,7 +146,7 @@ class PointRemoveSelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         entry_id = self.values[0]
-        self.cog.remove_point_entry(entry_id)
+        self.cog.remove_point_entry(f"manual_{entry_id}")
         await interaction.response.send_message(f"Запись с ID `{entry_id}` была успешно удалена.", ephemeral=True)
         self.disabled = True
         await interaction.message.edit(view=self.view)
@@ -155,9 +176,11 @@ class PointCog(commands.Cog, name="Points"):
         data.append(entry)
         self._save_points(data)
         
-    def remove_point_entry(self, entry_id):
+    def remove_point_entry(self, unique_id: str):
+        if not unique_id.startswith("manual_"): return
+        entry_id_to_remove = unique_id.split('_', 1)[1]
         data = self._load_points()
-        data = [e for e in data if e.get('entry_id') != entry_id]
+        data = [e for e in data if e.get('entry_id') != entry_id_to_remove]
         self._save_points(data)
 
     point_group = app_commands.Group(name="point", description="Команды для ручного управления баллами")
@@ -169,7 +192,7 @@ class PointCog(commands.Cog, name="Points"):
         modal = PointAddModal(self)
         await interaction.response.send_modal(modal)
 
-    @point_group.command(name="edit", description="Назначить баллы для ивента с 0 баллов.")
+    @point_group.command(name="edit", description="Изменить баллы для одного из последних ивентов пользователя.")
     @app_commands.describe(пользователь="Пользователь, чьи ивенты нужно найти")
     @app_commands.guild_only()
     @is_admin()
@@ -181,55 +204,55 @@ class PointCog(commands.Cog, name="Points"):
             if not channel:
                 await interaction.followup.send("Ошибка: Не удалось найти канал для парсинга.", ephemeral=True)
                 return
-            
-            manual_points = self._load_points()
-            processed_message_ids = {entry.get('source_message_id') for entry in manual_points if entry.get('source_message_id')}
-            
-            zero_point_events = []
-            async for message in channel.history(limit=1000):
-                if not message.embeds or message.id in processed_message_ids: continue
-                
-                for embed in message.embeds:
-                    if embed.title != "Отчет о проведенном ивенте": continue
 
+            user_events = []
+            # 1. Собираем мануальные ивенты
+            manual_points = self._load_points()
+            manual_events_processed_sources = set()
+            for entry in manual_points:
+                if entry['user_id'] == пользователь.id:
+                    user_events.append({
+                        'user_id': entry['user_id'], 'points': entry['points'], 'event_name': entry['event_name'],
+                        'timestamp_dt': datetime.fromisoformat(entry['end_time_iso']),
+                        'unique_id': f"manual_{entry['entry_id']}", 'message_id': entry.get('source_message_id')
+                    })
+                    if entry.get('source_message_id'):
+                        manual_events_processed_sources.add(entry['source_message_id'])
+
+            # 2. Сканируем эмбеды, пропуская те, что уже были обработаны вручную
+            async for message in channel.history(limit=1000):
+                if not message.embeds or message.id in manual_events_processed_sources: continue
+                for embed in message.embeds:
                     user_id_from_embed = None
                     if embed.description and "<@" in embed.description:
                         match = re.search(r'<@(\d+)>', embed.description)
                         if match: user_id_from_embed = int(match.group(1))
 
                     if user_id_from_embed == пользователь.id:
-                        points = -1
+                        data = {
+                            'user_id': user_id_from_embed, 'points': 0, 'event_name': 'Без названия',
+                            'timestamp_dt': message.created_at.astimezone(pytz.timezone('Europe/Moscow')),
+                            'message_id': message.id, 'unique_id': f"embed_{message.id}"
+                        }
                         for field in embed.fields:
-                            if 'получено' in field.name.lower():
-                                try: points = int(re.search(r'\d+', field.value).group())
-                                except: points = 0
-                                break
-                        
-                        if points == 0:
-                            data = {
-                                'message_id': message.id, 'user_id': user_id_from_embed, 'user_nick': 'N/A',
-                                'event_name': 'Без названия', 'timestamp_dt': message.created_at.astimezone(pytz.timezone('Europe/Moscow'))
-                            }
-                            if embed.description:
-                                match = re.search(r'<@(\d+)>', embed.description)
-                                if match:
-                                    nick_part = embed.description[match.end():].strip()
-                                    data['user_nick'] = nick_part.replace('`', '').strip() or 'N/A'
-                            for field in embed.fields:
-                                if 'ивент' == field.name.lower().replace('>', '').strip():
-                                    data['event_name'] = field.value.replace('`', '').strip() or 'Без названия'
-                            zero_point_events.append(data)
-                            break
-            
-            zero_point_events.sort(key=lambda x: x['timestamp_dt'], reverse=True)
-            events_to_show = zero_point_events[:10]
+                            clean_name = field.name.lower().replace('>', '').strip()
+                            if clean_name == 'получено':
+                                try: data['points'] = int(re.search(r'\d+', field.value).group())
+                                except: pass
+                            elif clean_name == 'ивент':
+                                data['event_name'] = field.value.replace('`', '').strip() or 'Без названия'
+                        user_events.append(data)
+                        break
+
+            user_events.sort(key=lambda x: x['timestamp_dt'], reverse=True)
+            events_to_show = user_events[:10]
 
             if not events_to_show:
-                await interaction.followup.send(f"Не найдено необработанных ивентов с 0 баллов для {пользователь.mention}.", ephemeral=True)
+                await interaction.followup.send(f"Не найдено недавних ивентов для {пользователь.mention}.", ephemeral=True)
                 return
 
-            view = EditZeroPointEventView(self, events_to_show)
-            await interaction.followup.send(f"Выберите ивент для начисления баллов (показаны последние 10):", view=view, ephemeral=True)
+            view = EditEventView(self.bot, self, events_to_show)
+            await interaction.followup.send(f"Выберите ивент для редактирования (показаны последние 10):", view=view, ephemeral=True)
         except Exception as e:
             print(f"Ошибка в /point edit: {e}")
             await interaction.followup.send(f"Произошла непредвиденная ошибка.", ephemeral=True)

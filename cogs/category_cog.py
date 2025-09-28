@@ -95,5 +95,5 @@ class CategoryCog(commands.Cog):
 
 async def setup(bot: commands.Bot):
     cog = CategoryCog(bot)
-    bot.tree.add_command(cog.category_group)
+    bot.tree.add_command(cog.category_group, guild=bot.guilds[0] if bot.guilds else None)
 

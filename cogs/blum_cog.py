@@ -70,5 +70,5 @@ class BlumCog(commands.Cog):
 
 async def setup(bot: commands.Bot):
     cog = BlumCog(bot)
-    bot.tree.add_command(cog.blum_group)
+    bot.tree.add_command(cog.blum_group, guild=bot.guilds[0] if bot.guilds else None)
 

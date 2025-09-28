@@ -34,7 +34,7 @@ class MyBot(commands.Bot):
             'cogs.blum_cog',
             'cogs.logs_cog',
             'cogs.help_cog',
-            'cogs.point_cog' # Новый ког для ручного управления баллами
+            'cogs.point_cog'
         ]
 
     async def setup_hook(self):
@@ -55,21 +55,29 @@ class MyBot(commands.Bot):
         except Exception as e:
             print(f"Ошибка при синхронизации команд: {e}")
 
-# --- Вспомогательная функция для проверки прав администратора ---
+# --- Новая, исправленная функция для проверки прав администратора ---
 def is_admin():
-    """Проверяет, имеет ли пользователь необходимую роль для выполнения команды."""
-    async def predicate(interaction: discord.Interaction) -> bool:
-        admin_role = interaction.guild.get_role(int(ADMIN_ROLE_ID))
-        if admin_role is None:
-            await interaction.response.send_message("Ошибка конфигурации: Роль администратора не найдена на сервере.", ephemeral=True)
+    """
+    Проверяет, имеет ли пользователь необходимую роль. 
+    Эта версия корректно работает со всеми типами взаимодействий.
+    """
+    def predicate(interaction: discord.Interaction) -> bool:
+        try:
+            # ADMIN_ROLE_ID должен быть числом
+            role_id = int(ADMIN_ROLE_ID)
+            admin_role = discord.utils.get(interaction.user.roles, id=role_id)
+            return admin_role is not None
+        except (ValueError, TypeError):
+            # Если ADMIN_ROLE_ID не задан или не является числом
             return False
             
-        if admin_role in interaction.user.roles:
-            return True
-        else:
+    async def check(interaction: discord.Interaction):
+        if not predicate(interaction):
             await interaction.response.send_message("У вас нет прав для выполнения этой команды.", ephemeral=True)
             return False
-    return app_commands.check(predicate)
+        return True
+
+    return app_commands.check(check)
 
 # --- Основная функция для запуска ---
 async def main():

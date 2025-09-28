@@ -11,9 +11,13 @@ from main import is_admin
 
 # --- UI для /point add (добавление баллов к существующему ивенту) ---
 
-class AddPointsToExistingModal(discord.ui.Modal, title="Добавить баллы к ивенту"):
+class AddPointsToExistingModal(discord.ui.Modal):
     def __init__(self, cog_instance, event_data):
-        super().__init__()
+        # Динамически устанавливаем заголовок
+        title = f"Баллы для: {event_data['event_name']}"
+        if len(title) > 45:
+            title = title[:42] + "..."
+        super().__init__(title=title)
         
         self.cog = cog_instance
         self.event_data = event_data
@@ -71,10 +75,6 @@ class SelectUserEventSelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         if self.view.is_finished():
-            try:
-                await interaction.response.send_message("Время для выбора истекло.", ephemeral=True, delete_after=5)
-            except discord.errors.InteractionResponded:
-                pass 
             return
             
         try:
@@ -117,7 +117,6 @@ class AddExtraPointModal(discord.ui.Modal, title="Создать запись о
             moscow_tz = pytz.timezone('Europe/Moscow')
             end_dt = moscow_tz.localize(datetime.strptime(f"{self.end_time.value}.{current_year}", '%H:%M %d.%m.%Y'))
             
-            # Очищаем название ивента перед сохранением
             sanitized_name = re.sub(r'[`\n\r]+', ' ', self.event_name.value).strip() or "Без названия"
 
             entry = {
@@ -139,7 +138,6 @@ class AddExtraPointModal(discord.ui.Modal, title="Создать запись о
 # --- UI для /point remove ---
 
 class PointRemoveSelect(discord.ui.Select):
-    # ... (код без изменений) ...
     def __init__(self, cog_instance, entries):
         self.cog = cog_instance
         options = []
@@ -200,7 +198,6 @@ class PointCog(commands.Cog, name="Points"):
     async def add_points(self, interaction: discord.Interaction, пользователь: discord.User):
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
-            # 1. Сканируем эмбеды
             parse_channel_id = int(os.getenv("PARSE_CHANNEL_ID"))
             channel = self.bot.get_channel(parse_channel_id)
             if not channel:
@@ -211,7 +208,6 @@ class PointCog(commands.Cog, name="Points"):
             async for message in channel.history(limit=1000):
                 if not message.embeds: continue
                 for embed in message.embeds:
-                    # ... (логика парсинга эмбеда для поиска user_id)
                     user_id_from_embed = None
                     user_info_source = None
                     if embed.description and "<@" in embed.description: user_info_source = embed.description
@@ -227,17 +223,14 @@ class PointCog(commands.Cog, name="Points"):
                         for field in embed.fields:
                             clean_name = field.name.lower().replace('>', '').strip()
                             if clean_name == 'ивент':
-                                # Улучшенная очистка названия ивента
                                 sanitized_name = re.sub(r'[`\n\r]+', ' ', field.value).strip()
                                 data['event_name'] = sanitized_name or 'Без названия'
                                 break
                         user_events.append(data)
 
-            # 2. Собираем мануальные ивенты
             manual_points = self._load_points()
             for entry in manual_points:
                 if entry['user_id'] == пользователь.id:
-                    # Очищаем название ивента и здесь для консистентности
                     sanitized_name = re.sub(r'[`\n\r]+', ' ', entry['event_name']).strip() or "Без названия"
                     user_events.append({
                         'user_id': entry['user_id'],
@@ -246,7 +239,6 @@ class PointCog(commands.Cog, name="Points"):
                         'unique_id': f"manual_{entry['entry_id']}"
                     })
 
-            # 3. Сортируем и выбираем последние 10
             user_events.sort(key=lambda x: x['timestamp_dt'], reverse=True)
             events_to_show = user_events[:10]
 
@@ -315,5 +307,5 @@ class PointCog(commands.Cog, name="Points"):
 
 async def setup(bot: commands.Bot):
     cog = PointCog(bot)
-    bot.tree.add_command(cog.point_group)
+    bot.tree.add_command(cog.point_group, guild=bot.guilds[0] if bot.guilds else None)
 

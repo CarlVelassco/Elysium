@@ -65,6 +65,46 @@ class AddPointsToEventModal(discord.ui.Modal, title='Добавить баллы
         except Exception as e:
             await interaction.response.send_message(f"Произошла непредвиденная ошибка: {e}", ephemeral=True)
         
+# --- UI компоненты для выбора ивента с 0 баллов ---
+
+class ZeroPointEventSelect(discord.ui.Select):
+    """Выпадающий список для выбора ивента с 0 баллов."""
+    def __init__(self, cog_instance, zero_point_events):
+        self.cog = cog_instance
+        # Создаем словарь для быстрого доступа к данным ивента по ID сообщения
+        self.events_map = {str(event['message_id']): event for event in zero_point_events}
+        
+        options = []
+        if not zero_point_events:
+            options.append(discord.SelectOption(label="Ивенты с 0 баллов не найдены.", value="disabled"))
+        else:
+            for event in zero_point_events: # Уже отфильтровано до 10
+                end_dt = event['timestamp_dt']
+                label = f"{event['event_name']}"
+                description = f"Время: {end_dt.strftime('%H:%M %d.%m.%Y')}"
+                options.append(discord.SelectOption(label=label, value=str(event['message_id']), description=description))
+
+        super().__init__(
+            placeholder="Выберите ивент для начисления баллов...",
+            min_values=1,
+            max_values=1,
+            options=options,
+            disabled=(not zero_point_events)
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        selected_event_id = self.values[0]
+        event_data = self.events_map[selected_event_id]
+        
+        modal = AddPointsToEventModal(self.cog, event_data)
+        await interaction.response.send_modal(modal)
+
+class ZeroPointEventView(discord.ui.View):
+    """Контейнер для выпадающего списка."""
+    def __init__(self, cog_instance, zero_point_events):
+        super().__init__(timeout=600)
+        self.add_item(ZeroPointEventSelect(cog_instance, zero_point_events))
+        
 # --- UI компоненты для удаления записей ---
 
 class PointRemoveSelect(discord.ui.Select):
@@ -123,104 +163,91 @@ class PointCog(commands.Cog, name="Points"):
 
     point_group = app_commands.Group(name="point", description="Команды для ручного управления баллами")
 
-    @point_group.command(name="add", description="Начислить баллы ивенту с 0 баллов по ID его сообщения.")
-    @app_commands.describe(id_сообщения="ID сообщения с отчетом об ивенте")
+    @point_group.command(name="add", description="Найти последние 10 ивентов пользователя с 0 баллов для начисления.")
+    @app_commands.describe(пользователь="Пользователь, чьи ивенты нужно найти")
     @app_commands.guild_only()
     @is_admin()
-    async def add_points(self, interaction: discord.Interaction, id_сообщения: str):
-        try:
-            message_id = int(id_сообщения)
-        except ValueError:
-            await interaction.response.send_message("Ошибка: ID сообщения должен быть числом.", ephemeral=True)
-            return
-
+    async def add_points(self, interaction: discord.Interaction, пользователь: discord.User):
+        await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             parse_channel_id = int(os.getenv("PARSE_CHANNEL_ID"))
             channel = self.bot.get_channel(parse_channel_id)
             if not channel:
-                await interaction.response.send_message("Ошибка: Не удалось найти канал для парсинга логов.", ephemeral=True)
+                await interaction.followup.send("Ошибка: Не удалось найти канал для парсинга логов.", ephemeral=True)
                 return
 
-            message = await channel.fetch_message(message_id)
-
-            # Проверка, не был ли этот ивент уже обработан
             manual_points = self._load_points()
             processed_message_ids = {entry.get('source_message_id') for entry in manual_points if entry.get('source_message_id')}
-            if message.id in processed_message_ids:
-                await interaction.response.send_message("Этот ивент уже был обработан и ему были начислены баллы.", ephemeral=True)
-                return
 
-            if not message.embeds:
-                await interaction.response.send_message("В этом сообщении нет эмбедов.", ephemeral=True)
-                return
-
-            found_event = False
-            for embed in message.embeds:
-                if embed.title != "Отчет о проведенном ивенте":
+            user_zero_point_events = []
+            # Сканируем последние 1000 сообщений, этого должно быть достаточно
+            async for message in channel.history(limit=1000):
+                if not message.embeds or message.id in processed_message_ids:
                     continue
-
-                points = -1
-                for field in embed.fields:
-                    if 'получено' in field.name.lower():
-                        try: points = int(re.search(r'\d+', field.value).group())
-                        except: points = 0
-                        break
                 
-                if points != 0:
-                    await interaction.response.send_message(f"Этот ивент имеет {points} баллов, а не 0. Начисление не требуется.", ephemeral=True)
-                    return
+                for embed in message.embeds:
+                    if embed.title != "Отчет о проведенном ивенте":
+                        continue
+                    
+                    # Проверяем ID пользователя в первую очередь
+                    user_id_from_embed = None
+                    user_info_source = None
+                    if embed.description and "<@" in embed.description:
+                        user_info_source = embed.description
+                    else:
+                        for field in embed.fields:
+                            if "<@" in field.value:
+                                user_info_source = field.value
+                                break
+                    if user_info_source:
+                        match = re.search(r'<@(\d+)>', user_info_source)
+                        if match:
+                            user_id_from_embed = int(match.group(1))
 
-                # Если баллы = 0, парсим данные
-                event_data = {
-                    'message_id': message.id,
-                    'user_id': None,
-                    'user_nick': 'N/A',
-                    'event_name': 'Без названия',
-                    'timestamp_dt': message.created_at.astimezone(pytz.timezone('Europe/Moscow'))
-                }
-                
-                # Ищем ID и ник. Сначала в описании, потом в полях.
-                user_info_source = None
-                if embed.description and "<@" in embed.description:
-                    user_info_source = embed.description
-                else:
+                    if user_id_from_embed != пользователь.id:
+                        continue
+
+                    # Проверяем баллы
+                    points = -1 
                     for field in embed.fields:
-                        if "<@" in field.value:
-                            user_info_source = field.value
-                            break 
-                
-                if user_info_source:
-                    match = re.search(r'<@(\d+)>', user_info_source)
-                    if match:
-                        event_data['user_id'] = int(match.group(1))
-                        nick_part = user_info_source[match.end():].strip()
-                        event_data['user_nick'] = nick_part.replace('`', '').strip() or 'N/A'
-                
-                # Ищем название ивента в полях
-                for field in embed.fields:
-                    if 'ивент' in field.name.lower():
-                        event_data['event_name'] = field.value.replace('`', '').strip()
-                        break
+                        if 'получено' in field.name.lower():
+                            try: points = int(re.search(r'\d+', field.value).group())
+                            except: points = 0
+                            break
+                    
+                    if points == 0:
+                        data = {
+                            'message_id': message.id,
+                            'user_id': user_id_from_embed,
+                            'user_nick': 'N/A',
+                            'event_name': 'Без названия',
+                            'timestamp_dt': message.created_at.astimezone(pytz.timezone('Europe/Moscow'))
+                        }
+                        if user_info_source:
+                            nick_part = user_info_source[match.end():].strip()
+                            data['user_nick'] = nick_part.replace('`', '').strip() or 'N/A'
+                        
+                        for field in embed.fields:
+                            if 'ивент' in field.name.lower():
+                                data['event_name'] = field.value.replace('`', '').strip()
+                        
+                        user_zero_point_events.append(data)
+                        break # Переходим к следующему сообщению
 
-                if not event_data['user_id']:
-                    await interaction.response.send_message("Не удалось определить ID ивентера в этом отчете.", ephemeral=True)
-                    return
-                
-                # Показываем модальное окно
-                modal = AddPointsToEventModal(self, event_data)
-                await interaction.response.send_modal(modal)
-                found_event = True
-                break
+            # Сортируем по дате и берем последние 10
+            user_zero_point_events.sort(key=lambda x: x['timestamp_dt'], reverse=True)
+            events_to_show = user_zero_point_events[:10]
 
-            if not found_event:
-                await interaction.response.send_message("Не найдено подходящего отчета об ивенте в этом сообщении.", ephemeral=True)
+            if not events_to_show:
+                await interaction.followup.send(f"Не найдено необработанных ивентов с 0 баллов для {пользователь.mention} за последнее время.", ephemeral=True)
+                return
 
-        except discord.NotFound:
-            await interaction.response.send_message("Сообщение с таким ID не найдено в канале для парсинга.", ephemeral=True)
+            view = ZeroPointEventView(self, events_to_show)
+            await interaction.followup.send(f"Найдены ивенты с 0 баллов для {пользователь.mention} (показаны последние 10). Выберите один:", view=view, ephemeral=True)
+
         except Exception as e:
-            print(f"Ошибка в /point add (id): {e}")
-            if not interaction.response.is_done():
-                await interaction.response.send_message(f"Произошла непредвиденная ошибка: {e}", ephemeral=True)
+            print(f"Ошибка в /point add (user): {e}")
+            await interaction.followup.send(f"Произошла непредвиденная ошибка: {e}", ephemeral=True)
     
     @point_group.command(name="remove", description="Удалить вручную начисленные баллы.")
     @app_commands.guild_only()

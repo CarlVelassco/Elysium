@@ -80,8 +80,11 @@ class ZeroPointEventSelect(discord.ui.Select):
         else:
             for event in zero_point_events: # Уже отфильтровано до 10
                 end_dt = event['timestamp_dt']
-                label = f"{event['event_name']}"
-                description = f"Время: {end_dt.strftime('%H:%M %d.%m.%Y')}"
+                # Отображаем название ивента и время для удобства различения
+                label = f"{event['event_name']} ({end_dt.strftime('%H:%M %d.%m')})"
+                if len(label) > 100: # Обрезаем слишком длинные названия
+                    label = label[:97] + "..."
+                description = f"Полная дата: {end_dt.strftime('%d.%m.%Y')}"
                 options.append(discord.SelectOption(label=label, value=str(event['message_id']), description=description))
 
         super().__init__(

@@ -174,9 +174,14 @@ class PointCog(commands.Cog, name="Points"):
                 user_entries_str = ""
 
             end_dt = datetime.fromisoformat(entry['end_time_iso'])
-            adder_name = entry.get('adder_name', 'Неизвестно') # Обработка старых записей
+            adder_id = entry.get('adder_id')
+            if adder_id:
+                adder_info = f"<@{adder_id}>"
+            else:
+                adder_info = entry.get('adder_name', 'Неизвестно') # Обработка старых записей
+            
             user_entries_str += (f"- **{entry['points']} баллов** | `{entry['event_name']}` "
-                                 f"| {end_dt.strftime('%H:%M %d.%m.%Y')} | Добавил: {adder_name}\n")
+                                 f"| {end_dt.strftime('%H:%M %d.%m.%Y')} | Добавил: {adder_info}\n")
         
         if current_user_id is not None:
             embed.add_field(name=f"Пользователь: <@{current_user_id}>", value=user_entries_str, inline=False)

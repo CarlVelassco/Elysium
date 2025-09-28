@@ -11,9 +11,14 @@ from main import is_admin
 
 # --- UI для /point add (добавление баллов к существующему ивенту) ---
 
-class AddPointsToExistingModal(discord.ui.Modal, title="Добавить баллы к ивенту"):
+class AddPointsToExistingModal(discord.ui.Modal):
     def __init__(self, cog_instance, event_data):
-        super().__init__()
+        # Динамически устанавливаем заголовок, обрезая его при необходимости
+        title = f"Баллы для: {event_data['event_name']}"
+        if len(title) > 45:
+            title = title[:42] + "..."
+        super().__init__(title=title)
+        
         self.cog = cog_instance
         self.event_data = event_data
         
@@ -69,10 +74,22 @@ class SelectUserEventSelect(discord.ui.Select):
         super().__init__(placeholder="Выберите ивент для добавления баллов...", options=options, disabled=(not user_events))
 
     async def callback(self, interaction: discord.Interaction):
-        if self.view.is_finished(): return
-        event_data = self.events_map[self.values[0]]
-        modal = AddPointsToExistingModal(self.cog, event_data)
-        await interaction.response.send_modal(modal)
+        if self.view.is_finished():
+            # Если время вышло, можно отправить тихое сообщение, чтобы убрать "ошибку"
+            try:
+                await interaction.response.send_message("Время для выбора истекло.", ephemeral=True, delete_after=5)
+            except discord.errors.InteractionResponded:
+                pass # Если бот уже ответил, ничего страшного
+            return
+            
+        try:
+            event_data = self.events_map[self.values[0]]
+            modal = AddPointsToExistingModal(self.cog, event_data)
+            await interaction.response.send_modal(modal)
+        except Exception as e:
+            print(f"Ошибка в колбэке SelectUserEventSelect: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message("Произошла ошибка при обработке вашего выбора.", ephemeral=True)
 
 class SelectUserEventView(discord.ui.View):
     def __init__(self, cog_instance, user_events):

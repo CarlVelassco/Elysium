@@ -11,10 +11,11 @@ from main import is_admin
 
 # --- UI компонент для добавления баллов к конкретному ивенту ---
 
-class AddPointsToEventModal(discord.ui.Modal, title='Добавить баллы к ивенту'):
+class AddPointsToEventModal(discord.ui.Modal):
     """Модальное окно, запрашивающее только количество баллов для выбранного ивента."""
     def __init__(self, cog_instance, event_data):
-        super().__init__()
+        # Устанавливаем заголовок динамически с названием ивента
+        super().__init__(title=f"Баллы для '{event_data['event_name']}'")
         self.cog = cog_instance
         self.event_data = event_data
         
@@ -106,8 +107,22 @@ class ZeroPointEventView(discord.ui.View):
     """Контейнер для выпадающего списка."""
     def __init__(self, cog_instance, zero_point_events):
         super().__init__(timeout=600)
+        self.message = None # Будет хранить сообщение, к которому прикреплен view
         self.add_item(ZeroPointEventSelect(cog_instance, zero_point_events))
         
+    async def on_timeout(self):
+        """Отключает view и редактирует сообщение по истечении времени."""
+        if self.message:
+            for item in self.children:
+                item.disabled = True
+            try:
+                await self.message.edit(content="Время для выбора ивента истекло. Пожалуйста, вызовите команду `/point add` заново.", view=self)
+            except discord.NotFound:
+                # Сообщение было скрыто пользователем, ничего страшного.
+                pass
+            except Exception as e:
+                print(f"Ошибка при редактировании сообщения по таймауту: {e}")
+
 # --- UI компоненты для удаления записей ---
 
 class PointRemoveSelect(discord.ui.Select):
@@ -246,7 +261,8 @@ class PointCog(commands.Cog, name="Points"):
                 return
 
             view = ZeroPointEventView(self, events_to_show)
-            await interaction.followup.send(f"Найдены ивенты с 0 баллов для {пользователь.mention} (показаны последние 10). Выберите один:", view=view, ephemeral=True)
+            message = await interaction.followup.send(f"Найдены ивенты с 0 баллов для {пользователь.mention} (показаны последние 10). Выберите один:", view=view, ephemeral=True)
+            view.message = message # Сохраняем сообщение в view для последующего редактирования
 
         except Exception as e:
             print(f"Ошибка в /point add (user): {e}")

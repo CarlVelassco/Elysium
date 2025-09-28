@@ -178,16 +178,29 @@ class PointCog(commands.Cog, name="Points"):
                     'event_name': 'Без названия',
                     'timestamp_dt': message.created_at.astimezone(pytz.timezone('Europe/Moscow'))
                 }
-                if embed.description:
-                    match = re.search(r'<@(\d+)>', embed.description)
+                
+                # Ищем ID и ник. Сначала в описании, потом в полях.
+                user_info_source = None
+                if embed.description and "<@" in embed.description:
+                    user_info_source = embed.description
+                else:
+                    for field in embed.fields:
+                        if "<@" in field.value:
+                            user_info_source = field.value
+                            break 
+                
+                if user_info_source:
+                    match = re.search(r'<@(\d+)>', user_info_source)
                     if match:
                         event_data['user_id'] = int(match.group(1))
-                        nick_part = embed.description[match.end():].strip()
+                        nick_part = user_info_source[match.end():].strip()
                         event_data['user_nick'] = nick_part.replace('`', '').strip() or 'N/A'
                 
+                # Ищем название ивента в полях
                 for field in embed.fields:
                     if 'ивент' in field.name.lower():
                         event_data['event_name'] = field.value.replace('`', '').strip()
+                        break
 
                 if not event_data['user_id']:
                     await interaction.response.send_message("Не удалось определить ID ивентера в этом отчете.", ephemeral=True)

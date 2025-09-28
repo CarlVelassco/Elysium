@@ -223,7 +223,11 @@ class PointCog(commands.Cog, name="Points"):
                         data = {'user_id': user_id_from_embed, 'event_name': 'Без названия', 'timestamp_dt': message.created_at.astimezone(pytz.timezone('Europe/Moscow')), 'message_id': message.id, 'unique_id': f"embed_{message.id}"}
                         for field in embed.fields:
                             clean_name = field.name.lower().replace('>', '').strip()
-                            if clean_name == 'ивент': data['event_name'] = field.value.replace('`', '').strip(); break
+                            if clean_name == 'ивент':
+                                # Улучшенная очистка названия ивента
+                                sanitized_name = re.sub(r'[`\n\r]+', ' ', field.value).strip()
+                                data['event_name'] = sanitized_name or 'Без названия'
+                                break
                         user_events.append(data)
 
             # 2. Собираем мануальные ивенты

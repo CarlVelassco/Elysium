@@ -41,7 +41,8 @@ class MyBot(commands.Bot):
         """Глобальный обработчик ошибок для слэш-команд."""
         if isinstance(error, app_commands.CheckFailure):
             # Отправляем сообщение, если проверка is_admin не пройдена
-            await interaction.response.send_message("У вас нет прав для выполнения этой команды.", ephemeral=True)
+            if not interaction.response.is_done():
+                await interaction.response.send_message("У вас нет прав для выполнения этой команды.", ephemeral=True)
         else:
             print(f"Необработанная ошибка в дереве команд: {error}")
             # Отправляем общее сообщение об ошибке, если ответ еще не был отправлен

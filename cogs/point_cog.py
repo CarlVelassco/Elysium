@@ -116,18 +116,21 @@ class AddExtraPointModal(discord.ui.Modal, title="Создать запись о
             current_year = datetime.now().year
             moscow_tz = pytz.timezone('Europe/Moscow')
             end_dt = moscow_tz.localize(datetime.strptime(f"{self.end_time.value}.{current_year}", '%H:%M %d.%m.%Y'))
+            
+            # Очищаем название ивента перед сохранением
+            sanitized_name = re.sub(r'[`\n\r]+', ' ', self.event_name.value).strip() or "Без названия"
 
             entry = {
                 "entry_id": str(uuid.uuid4()),
                 "user_id": self.user.id,
                 "points": pts,
-                "event_name": self.event_name.value,
+                "event_name": sanitized_name,
                 "end_time_iso": end_dt.isoformat(),
                 "adder_id": interaction.user.id,
                 "adder_name": interaction.user.display_name,
             }
             self.cog.add_point_entry(entry)
-            await interaction.response.send_message(f"Баллы ({pts}) успешно начислены <@{self.user.id}> за '{self.event_name.value}'.", ephemeral=True)
+            await interaction.response.send_message(f"Баллы ({pts}) успешно начислены <@{self.user.id}> за '{sanitized_name}'.", ephemeral=True)
         except ValueError:
             await interaction.response.send_message("Ошибка формата данных.", ephemeral=True)
         except Exception as e:
@@ -234,9 +237,11 @@ class PointCog(commands.Cog, name="Points"):
             manual_points = self._load_points()
             for entry in manual_points:
                 if entry['user_id'] == пользователь.id:
+                    # Очищаем название ивента и здесь для консистентности
+                    sanitized_name = re.sub(r'[`\n\r]+', ' ', entry['event_name']).strip() or "Без названия"
                     user_events.append({
                         'user_id': entry['user_id'],
-                        'event_name': entry['event_name'],
+                        'event_name': sanitized_name,
                         'timestamp_dt': datetime.fromisoformat(entry['end_time_iso']),
                         'unique_id': f"manual_{entry['entry_id']}"
                     })

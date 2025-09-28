@@ -103,6 +103,7 @@ class PointRemoveView(discord.ui.View):
 class PointCog(commands.Cog, name="Points"):
     def __init__(self, bot):
         self.bot = bot
+        # Используем централизованный путь к данным, который указывает на постоянное хранилище
         self.data_path = getattr(self.bot, 'data_path', '.')
         self.points_file = os.path.join(self.data_path, 'manual_points.json')
 
@@ -180,4 +181,5 @@ class PointCog(commands.Cog, name="Points"):
 async def setup(bot: commands.Bot):
     cog = PointCog(bot)
     bot.tree.add_command(cog.point_group)
+
 

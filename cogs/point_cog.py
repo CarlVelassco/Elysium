@@ -98,6 +98,10 @@ class ZeroPointEventSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
+        # Если view уже неактивен (например, по таймауту), ничего не делаем
+        if self.view.is_finished():
+            return
+
         selected_event_id = self.values[0]
         event_data = self.events_map[selected_event_id]
         
@@ -229,7 +233,8 @@ class PointCog(commands.Cog, name="Points"):
                     # Проверяем баллы
                     points = -1 
                     for field in embed.fields:
-                        if 'получено' in field.name.lower():
+                        clean_field_name = field.name.lower().replace('>', '').strip()
+                        if clean_field_name == 'получено':
                             try: points = int(re.search(r'\d+', field.value).group())
                             except: points = 0
                             break
@@ -247,7 +252,8 @@ class PointCog(commands.Cog, name="Points"):
                             data['user_nick'] = nick_part.replace('`', '').strip() or 'N/A'
                         
                         for field in embed.fields:
-                            if 'ивент' in field.name.lower():
+                            clean_field_name = field.name.lower().replace('>', '').strip()
+                            if clean_field_name == 'ивент':
                                 data['event_name'] = field.value.replace('`', '').strip()
                         
                         user_zero_point_events.append(data)

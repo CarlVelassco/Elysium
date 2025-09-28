@@ -54,7 +54,7 @@ class DateRangeModal(discord.ui.Modal, title='Укажите диапазон д
             await interaction.followup.send(f"Ошибка: {e}", ephemeral=True)
         except Exception as e:
             print(f"Критическая ошибка в модальном окне: {e}")
-            await interaction.followup.send("Произошла непредвиденная ошибка при создании лога.", ephemeral=True)
+            await interaction.followup.send(f"Произошла непредвиденная ошибка при создании лога: {e}", ephemeral=True)
 
 class MakserSelect(discord.ui.Select):
     def __init__(self, cog_instance):
@@ -104,6 +104,7 @@ class LogsCog(commands.Cog):
         self.data_path = getattr(self.bot, 'data_path', '.')
         self.categories_file = os.path.join(self.data_path, 'categories.json')
         self.blum_file = os.path.join(self.data_path, 'blum_list.json')
+        self.points_file = os.path.join(self.data_path, 'manual_points.json')
 
     def _load_json(self, filename, default_value):
         try:
@@ -116,6 +117,7 @@ class LogsCog(commands.Cog):
         current_year = datetime.now().year
         def parse_date(d_str):
             try:
+                # Используем текущий год для парсинга
                 dt_obj = datetime.strptime(f"{d_str.strip()}.{current_year}", '%d.%m.%Y')
                 return self.moscow_tz.localize(dt_obj)
             except ValueError:
@@ -133,21 +135,20 @@ class LogsCog(commands.Cog):
     async def _get_events_in_range(self, interaction: discord.Interaction, date_range_str: str, log_type: str, user_id: int = None, category_name: str = None):
         start_time, end_time = self.parse_date_range(date_range_str)
         
+        all_events = []
+        
+        # 1. Парсинг ивентов из эмбедов
         parse_channel_id = int(os.getenv("PARSE_CHANNEL_ID"))
         channel = self.bot.get_channel(parse_channel_id)
         if not channel:
-            if interaction.is_response():
-                await interaction.followup.send("Ошибка: Не удалось найти канал для парсинга.", ephemeral=True)
-            else:
-                await interaction.response.send_message("Ошибка: Не удалось найти канал для парсинга.", ephemeral=True)
+            if interaction.is_response(): await interaction.followup.send("Ошибка: Не удалось найти канал для парсинга.", ephemeral=True)
+            else: await interaction.response.send_message("Ошибка: Не удалось найти канал для парсинга.", ephemeral=True)
             return []
 
-        all_events = []
         async for message in channel.history(limit=None, after=start_time, before=end_time):
             if not message.embeds: continue
             for embed in message.embeds:
                 if embed.title != "Отчет о проведенном ивенте": continue
-
                 data = {'user_id': None, 'user_nick': 'N/A', 'points': 0, 'event_name': 'Без названия', 'timestamp_dt': message.created_at.astimezone(self.moscow_tz)}
                 if embed.description:
                     match = re.search(r'<@(\d+)>', embed.description)
@@ -155,18 +156,40 @@ class LogsCog(commands.Cog):
                         data['user_id'] = int(match.group(1))
                         nick_part = embed.description[match.end():].strip()
                         data['user_nick'] = nick_part.replace('`', '').strip() or 'N/A'
-
                 for field in embed.fields:
                     clean_field_name = field.name.lower().replace('>', '').strip()
                     if clean_field_name == 'получено':
                         try: data['points'] = int(re.search(r'\d+', field.value).group())
-                        except (AttributeError, ValueError, IndexError): continue
+                        except: continue
                     elif clean_field_name == 'ивент':
                         data['event_name'] = field.value.replace('`', '').strip()
-                
                 if data['points'] > 0 and data['user_id'] is not None:
                     all_events.append(data)
+
+        # 2. Загрузка ивентов, добавленных вручную
+        manual_points = self._load_json(self.points_file, [])
+        nick_cache = {}
+        for entry in manual_points:
+            end_dt = datetime.fromisoformat(entry['end_time_iso'])
+            if start_time <= end_dt < end_time:
+                uid = entry['user_id']
+                if uid not in nick_cache:
+                    try:
+                        member = await interaction.guild.fetch_member(uid)
+                        nick_cache[uid] = member.display_name if member else f"ID {uid}"
+                    except discord.NotFound:
+                        nick_cache[uid] = f"ID {uid}"
+                
+                manual_event = {
+                    'user_id': uid,
+                    'user_nick': nick_cache[uid],
+                    'points': entry['points'],
+                    'event_name': entry['event_name'],
+                    'timestamp_dt': end_dt
+                }
+                all_events.append(manual_event)
         
+        # 3. Фильтрация всех событий
         filtered_events = all_events
         if log_type == 'night_log':
             night_events = []
@@ -247,7 +270,7 @@ class LogsCog(commands.Cog):
             for event in events:
                 end_time = event['timestamp_dt']
                 start_time = end_time - timedelta(minutes=event['points'])
-                line = f"{start_time.strftime('%H:%M %d.%m')} | {end_time.strftime('%H:%M %d.%m')} | <@{event['user_id']}> | {event['user_nick']} | "
+                line = f"{start_time.strftime('%H:%M %d.%m.%Y')} | {end_time.strftime('%H:%M %d.%m.%Y')} | <@{event['user_id']}> | {event['user_nick']} | "
                 current_points = event['points']
                 night_bonus_info = ""
 
@@ -331,7 +354,7 @@ class LogsCog(commands.Cog):
         modal = DateRangeModal(category_name=None, log_type='eventstats', user_id=None, cog_instance=self)
         await interaction.response.send_modal(modal)
 
-    @app_commands.command(name="clear", description="Очищает историю текущего канала.")
+    @app_commands.command(name="clear", description="Очищает историю текущего канала (только для администраторов).")
     @app_commands.guild_only()
     @is_admin()
     async def clear(self, interaction: discord.Interaction, количество: discord.app_commands.Range[int, 1, 100] = 100):

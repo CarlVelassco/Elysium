@@ -11,13 +11,9 @@ from main import is_admin
 
 # --- UI для /point add (добавление баллов к существующему ивенту) ---
 
-class AddPointsToExistingModal(discord.ui.Modal):
+class AddPointsToExistingModal(discord.ui.Modal, title="Добавить баллы к ивенту"):
     def __init__(self, cog_instance, event_data):
-        # Динамически устанавливаем заголовок, обрезая его при необходимости
-        title = f"Баллы для: {event_data['event_name']}"
-        if len(title) > 45:
-            title = title[:42] + "..."
-        super().__init__(title=title)
+        super().__init__()
         
         self.cog = cog_instance
         self.event_data = event_data
@@ -75,11 +71,10 @@ class SelectUserEventSelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         if self.view.is_finished():
-            # Если время вышло, можно отправить тихое сообщение, чтобы убрать "ошибку"
             try:
                 await interaction.response.send_message("Время для выбора истекло.", ephemeral=True, delete_after=5)
             except discord.errors.InteractionResponded:
-                pass # Если бот уже ответил, ничего страшного
+                pass 
             return
             
         try:

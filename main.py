@@ -34,11 +34,25 @@ class MyBot(commands.Bot):
             'cogs.blum_cog',
             'cogs.logs_cog',
             'cogs.help_cog',
-            'cogs.point_cog' # Новый ког для ручного управления баллами
+            'cogs.point_cog'
         ]
 
+    async def on_tree_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        """Глобальный обработчик ошибок для слэш-команд."""
+        if isinstance(error, app_commands.CheckFailure):
+            # Отправляем сообщение, если проверка is_admin не пройдена
+            await interaction.response.send_message("У вас нет прав для выполнения этой команды.", ephemeral=True)
+        else:
+            print(f"Необработанная ошибка в дереве команд: {error}")
+            # Отправляем общее сообщение об ошибке, если ответ еще не был отправлен
+            if not interaction.response.is_done():
+                await interaction.response.send_message("Произошла непредвиденная ошибка при выполнении команды.", ephemeral=True)
+            else:
+                await interaction.followup.send("Произошла непредвиденная ошибка при выполнении команды.", ephemeral=True)
+
     async def setup_hook(self):
-        """Выполняется при запуске бота для загрузки когов."""
+        """Выполняется при запуске бота для загрузки когов и установки обработчика ошибок."""
+        self.tree.on_error = self.on_tree_error # Привязываем обработчик ошибок
         for cog in self.initial_cogs:
             try:
                 await self.load_extension(cog)
@@ -55,19 +69,20 @@ class MyBot(commands.Bot):
         except Exception as e:
             print(f"Ошибка при синхронизации команд: {e}")
 
-# --- Вспомогательная функция для проверки прав администратора ---
+# --- Новая, корректная функция для проверки прав администратора ---
 def is_admin():
-    """Проверяет, имеет ли пользователь необходимую роль для выполнения команды."""
+    """
+    Проверяет, имеет ли пользователь необходимую роль.
+    Эта версия не отправляет сообщений, а просто возвращает True/False,
+    позволяя глобальному обработчику ошибок отправлять ответ.
+    """
     async def predicate(interaction: discord.Interaction) -> bool:
-        admin_role = interaction.guild.get_role(int(ADMIN_ROLE_ID))
-        if admin_role is None:
-            await interaction.response.send_message("Ошибка конфигурации: Роль администратора не найдена на сервере.", ephemeral=True)
-            return False
-            
-        if admin_role in interaction.user.roles:
-            return True
-        else:
-            await interaction.response.send_message("У вас нет прав для выполнения этой команды.", ephemeral=True)
+        try:
+            admin_role = interaction.guild.get_role(int(ADMIN_ROLE_ID))
+            # Проверка вернет True если роль существует и есть у пользователя
+            return admin_role in interaction.user.roles
+        except (ValueError, AttributeError):
+            # Если ADMIN_ROLE_ID не установлен или некорректен, прав нет
             return False
     return app_commands.check(predicate)
 

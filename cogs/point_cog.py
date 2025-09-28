@@ -14,8 +14,8 @@ class PointAddModal(discord.ui.Modal, title='Начисление баллов')
         self.cog = cog_instance
 
     end_time = discord.ui.TextInput(
-        label="Время конца (ЧЧ:ММ ДД.ММ.ГГГГ)",
-        placeholder=f"Пример: 23:59 28.09.{datetime.now().year}",
+        label="Время конца (ЧЧ:ММ ДД.ММ)",
+        placeholder="Пример: 23:59 28.09",
         required=True
     )
     user_id = discord.ui.TextInput(
@@ -40,27 +40,31 @@ class PointAddModal(discord.ui.Modal, title='Начисление баллов')
             uid = int(self.user_id.value)
             pts = int(self.points.value)
             
-            # Парсинг времени с годом
+            # Парсинг времени с использованием текущего года
+            current_year = datetime.now().year
             moscow_tz = pytz.timezone('Europe/Moscow')
-            end_dt = moscow_tz.localize(datetime.strptime(self.end_time.value, '%H:%M %d.%m.%Y'))
+            end_dt = moscow_tz.localize(datetime.strptime(f"{self.end_time.value}.{current_year}", '%H:%M %d.%m.%Y'))
 
             entry = {
                 "entry_id": str(uuid.uuid4()),
                 "user_id": uid,
                 "points": pts,
                 "event_name": self.event_name.value,
-                "end_time_iso": end_dt.isoformat()
+                "end_time_iso": end_dt.isoformat(),
+                "adder_id": interaction.user.id,
+                "adder_name": interaction.user.display_name
             }
 
             self.cog.add_point_entry(entry)
             await interaction.response.send_message(
                 f"Баллы успешно начислены пользователю <@{uid}>.\n"
                 f"**Ивент:** {self.event_name.value}\n"
-                f"**Баллы:** {pts}",
+                f"**Баллы:** {pts}\n"
+                f"**Добавил:** {interaction.user.mention}",
                 ephemeral=True
             )
         except ValueError:
-            await interaction.response.send_message("Ошибка: ID и баллы должны быть числами, а время в формате ЧЧ:ММ ДД.ММ.ГГГГ.", ephemeral=True)
+            await interaction.response.send_message("Ошибка: ID и баллы должны быть числами, а время в формате ЧЧ:ММ ДД.ММ.", ephemeral=True)
         except Exception as e:
             await interaction.response.send_message(f"Произошла непредвиденная ошибка: {e}", ephemeral=True)
 
@@ -170,8 +174,9 @@ class PointCog(commands.Cog, name="Points"):
                 user_entries_str = ""
 
             end_dt = datetime.fromisoformat(entry['end_time_iso'])
+            adder_name = entry.get('adder_name', 'Неизвестно') # Обработка старых записей
             user_entries_str += (f"- **{entry['points']} баллов** | `{entry['event_name']}` "
-                                 f"| {end_dt.strftime('%H:%M %d.%m.%Y')} | ID: `{entry['entry_id']}`\n")
+                                 f"| {end_dt.strftime('%H:%M %d.%m.%Y')} | Добавил: {adder_name}\n")
         
         if current_user_id is not None:
             embed.add_field(name=f"Пользователь: <@{current_user_id}>", value=user_entries_str, inline=False)
@@ -181,5 +186,4 @@ class PointCog(commands.Cog, name="Points"):
 async def setup(bot: commands.Bot):
     cog = PointCog(bot)
     bot.tree.add_command(cog.point_group)
-
 

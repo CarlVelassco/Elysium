@@ -45,7 +45,6 @@ class DateRangeModal(discord.ui.Modal, title='Укажите диапазон д
                         user_id=None, category_name=category
                     )
                     if events:
-                        # --- ИЗМЕНЕНИЕ: Передаем use_mentions=False для формата с ID ---
                         log_file = await self.cog_instance.generate_log_file(
                             events, self.date_range_input.value, self.log_type, 
                             category_name=category, use_mentions=False
@@ -74,10 +73,9 @@ class DateRangeModal(discord.ui.Modal, title='Укажите диапазон д
                     await interaction.followup.send("За указанный период не найдено ивентов.", ephemeral=True)
                     return
                 
-                # --- ИЗМЕНЕНИЕ: Для одиночных отчетов используем формат с упоминаниями (по умолчанию) ---
                 log_file = await self.cog_instance.generate_log_file(
                     events, self.date_range_input.value, self.log_type, 
-                    category_name=self.category_name # use_mentions=True по умолчанию
+                    category_name=self.category_name
                 )
                 
                 log_channel_id = int(os.getenv("LOG_CHANNEL_ID"))
@@ -220,6 +218,7 @@ class LogsCog(commands.Cog):
                         historical_nick_cache[parsed_data['user_id']] = parsed_data['user_nick']
 
                 if message.id not in edited_message_ids:
+                    # --- ИЗМЕНЕНИЕ: Проверка на > 0 баллов остаётся ---
                     if parsed_data['points'] > 0 and parsed_data['user_id'] is not None:
                         all_events.append(parsed_data)
 
@@ -247,6 +246,10 @@ class LogsCog(commands.Cog):
 
         current_nick_cache = {}
         for entry in manual_entries_in_range:
+            # --- ИЗМЕНЕНИЕ: Исключаем ручные записи с 0 или менее баллов ---
+            if entry.get('points', 0) <= 0:
+                continue
+
             user_nick = 'N/A'
             original_message_id = entry.get('original_message_id')
             uid = entry['user_id']
@@ -298,7 +301,6 @@ class LogsCog(commands.Cog):
 
         return sorted(filtered_events, key=lambda x: x['timestamp_dt'])
 
-    # --- ИЗМЕНЕНИЕ: Добавлен параметр use_mentions для управления форматом вывода ---
     async def generate_log_file(self, events: list, date_range_str: str, log_type: str, category_name: str = None, use_mentions: bool = True):
         buffer = io.StringIO()
         total_points = 0
@@ -317,7 +319,6 @@ class LogsCog(commands.Cog):
             
             sorted_users = sorted(user_points.items(), key=lambda item: item[1], reverse=True)
             for i, (user_id, points) in enumerate(sorted_users, 1):
-                # --- ИЗМЕНЕНИЕ: Условный формат вывода ---
                 if use_mentions:
                     buffer.write(f"{i}. <@{user_id}> - {points} баллов\n")
                 else:
@@ -392,9 +393,13 @@ class LogsCog(commands.Cog):
 
         buffer.seek(0)
         
-        file_category_name = category_name.replace('__all__', 'Общий')
+        # --- ИСПРАВЛЕНИЕ: Безопасная генерация имени файла ---
         safe_date_range = re.sub(r'[<>:"/\\|?*]', '_', date_range_str)
-        filename = f"{file_category_name}_{safe_date_range}.txt" if log_type == 'makser' else f"log_{log_type}_{safe_date_range}.txt"
+        if log_type == 'makser':
+            file_category_name = category_name.replace('__all__', 'Общий') if category_name else "makser_log"
+            filename = f"{file_category_name}_{safe_date_range}.txt"
+        else:
+            filename = f"log_{log_type}_{safe_date_range}.txt"
 
         return discord.File(buffer, filename=filename)
 

@@ -117,7 +117,6 @@ class LogsCog(commands.Cog):
         current_year = datetime.now().year
         def parse_date(d_str):
             try:
-                # Используем текущий год для парсинга
                 dt_obj = datetime.strptime(f"{d_str.strip()}.{current_year}", '%d.%m.%Y')
                 return self.moscow_tz.localize(dt_obj)
             except ValueError:
@@ -137,7 +136,11 @@ class LogsCog(commands.Cog):
         
         all_events = []
         
-        # 1. Парсинг ивентов из эмбедов
+        # 1. Загрузка ручных записей и определение ID сообщений, которые были изменены
+        manual_points = self._load_json(self.points_file, [])
+        edited_message_ids = {entry['original_message_id'] for entry in manual_points if 'original_message_id' in entry}
+        
+        # 2. Парсинг ивентов из эмбедов, пропуская измененные
         parse_channel_id = int(os.getenv("PARSE_CHANNEL_ID"))
         channel = self.bot.get_channel(parse_channel_id)
         if not channel:
@@ -146,6 +149,9 @@ class LogsCog(commands.Cog):
             return []
 
         async for message in channel.history(limit=None, after=start_time, before=end_time):
+            if message.id in edited_message_ids:
+                continue # Пропускаем, так как есть ручная запись
+
             if not message.embeds: continue
             for embed in message.embeds:
                 if embed.title != "Отчет о проведенном ивенте": continue
@@ -166,8 +172,7 @@ class LogsCog(commands.Cog):
                 if data['points'] > 0 and data['user_id'] is not None:
                     all_events.append(data)
 
-        # 2. Загрузка ивентов, добавленных вручную
-        manual_points = self._load_json(self.points_file, [])
+        # 3. Добавление ручных записей в общий список
         nick_cache = {}
         for entry in manual_points:
             end_dt = datetime.fromisoformat(entry['end_time_iso'])
@@ -189,7 +194,7 @@ class LogsCog(commands.Cog):
                 }
                 all_events.append(manual_event)
         
-        # 3. Фильтрация всех событий
+        # 4. Фильтрация всех событий (логика осталась без изменений)
         filtered_events = all_events
         if log_type == 'night_log':
             night_events = []
@@ -209,7 +214,7 @@ class LogsCog(commands.Cog):
         for event in filtered_events:
             event['category'] = 'Other'
             for cat, event_list in categories.items():
-                if event['event_name'].lower() in [ev.lower() for ev in event_list]:
+                if event['event_name'].lower().startswith(tuple(ev.lower() for ev in event_list)):
                     event['category'] = cat
                     break
         
@@ -236,7 +241,7 @@ class LogsCog(commands.Cog):
             
             sorted_users = sorted(user_points.items(), key=lambda item: item[1], reverse=True)
             for i, (user_id, points) in enumerate(sorted_users, 1):
-                buffer.write(f"{i}. {user_id} - {points} баллов\n")
+                buffer.write(f"{i}. <@{user_id}> - {points} баллов\n")
         
         elif log_type == 'eventstats':
             buffer.write(f"Статистика по ивентам за {date_range_str}\n\n")
@@ -309,7 +314,7 @@ class LogsCog(commands.Cog):
         filename = f"log_{log_type}_{safe_date_range}.txt"
         return discord.File(buffer, filename=filename)
 
-    # --- Команды ---
+    # --- Команды (без изменений) ---
     @app_commands.command(name="logs", description="Общий лог за дату или период.")
     @app_commands.guild_only()
     async def logs(self, interaction: discord.Interaction):
@@ -369,4 +374,3 @@ class LogsCog(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(LogsCog(bot))
-

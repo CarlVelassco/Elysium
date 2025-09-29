@@ -44,6 +44,7 @@ class HelpCog(commands.Cog):
                 "`/blum list` - Показать список Blum.\n"
                 "`/blum clear` - Очистить список Blum.\n"
                 "`/point add` - Открыть форму для ручного начисления баллов.\n"
+                "`/point edit <пользователь>` - Изменить баллы за один из последних ивентов пользователя.\n"
                 "`/point remove` - Удалить вручную начисленные баллы.\n"
                 "`/point list` - Показать список вручную начисленных баллов.\n"
                 "`/clear [количество]` - Очищает сообщения в текущем канале."
@@ -58,4 +59,3 @@ class HelpCog(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(HelpCog(bot))
-

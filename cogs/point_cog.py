@@ -105,8 +105,6 @@ class PointRemoveView(discord.ui.View):
         super().__init__(timeout=300)
         self.add_item(PointRemoveSelect(cog_instance, entries))
 
-# --- NEW UI Components for /point edit ---
-
 class PointEditModal(discord.ui.Modal, title='Изменить баллы за ивент'):
     def __init__(self, cog_instance, event_data, original_view):
         super().__init__()
@@ -153,7 +151,7 @@ class PointEditModal(discord.ui.Modal, title='Изменить баллы за �
                         "entry_id": str(uuid.uuid4()),
                         "user_id": self.event_data['user_id'],
                         "points": new_points,
-                        "event_name": f"(Изменено) {self.event_data['event_name']}",
+                        "event_name": self.event_data['event_name'], # <--- ИЗМЕНЕНИЕ ЗДЕСЬ
                         "end_time_iso": self.event_data['timestamp_dt'].isoformat(),
                         "adder_id": interaction.user.id,
                         "adder_name": interaction.user.display_name,

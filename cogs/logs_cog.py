@@ -9,7 +9,7 @@ import json
 import re
 from main import is_admin
 
-# --- Вспомогательные классы для UI ---
+# --- Вспомогательные классы для UI (без изменений) ---
 
 class DateRangeModal(discord.ui.Modal, title='Укажите диапазон дат'):
     def __init__(self, category_name: str, log_type: str, user_id: int, cog_instance):
@@ -150,18 +150,17 @@ class LogsCog(commands.Cog):
 
         async for message in channel.history(limit=None, after=start_time, before=end_time):
             if message.id in edited_message_ids:
-                continue # Пропускаем, так как есть ручная запись
+                continue
 
             if not message.embeds: continue
             for embed in message.embeds:
                 if embed.title != "Отчет о проведенном ивенте": continue
-                data = {'user_id': None, 'user_nick': 'N/A', 'points': 0, 'event_name': 'Без названия', 'timestamp_dt': message.created_at.astimezone(self.moscow_tz)}
+                # --- ИЗМЕНЕНИЕ ЛОГИКИ НИКНЕЙМА ---
+                data = {'user_id': None, 'points': 0, 'event_name': 'Без названия', 'timestamp_dt': message.created_at.astimezone(self.moscow_tz)}
                 if embed.description:
                     match = re.search(r'<@(\d+)>', embed.description)
                     if match:
                         data['user_id'] = int(match.group(1))
-                        nick_part = embed.description[match.end():].strip()
-                        data['user_nick'] = nick_part.replace('`', '').strip() or 'N/A'
                 for field in embed.fields:
                     clean_field_name = field.name.lower().replace('>', '').strip()
                     if clean_field_name == 'получено':
@@ -173,33 +172,37 @@ class LogsCog(commands.Cog):
                     all_events.append(data)
 
         # 3. Добавление ручных записей в общий список
-        nick_cache = {}
         for entry in manual_points:
             end_dt = datetime.fromisoformat(entry['end_time_iso'])
             if start_time <= end_dt < end_time:
-                uid = entry['user_id']
-                if uid not in nick_cache:
-                    try:
-                        member = await interaction.guild.fetch_member(uid)
-                        nick_cache[uid] = member.display_name if member else f"ID {uid}"
-                    except discord.NotFound:
-                        nick_cache[uid] = f"ID {uid}"
-                
                 manual_event = {
-                    'user_id': uid,
-                    'user_nick': nick_cache[uid],
+                    'user_id': entry['user_id'],
                     'points': entry['points'],
                     'event_name': entry['event_name'],
                     'timestamp_dt': end_dt
                 }
                 all_events.append(manual_event)
         
-        # 4. Фильтрация всех событий (логика осталась без изменений)
+        # --- НОВЫЙ БЛОК: ПОЛУЧЕНИЕ АКТУАЛЬНЫХ НИКНЕЙМОВ ---
+        nick_cache = {}
+        for event in all_events:
+            uid = event['user_id']
+            if uid not in nick_cache:
+                try:
+                    member = await interaction.guild.fetch_member(uid)
+                    nick_cache[uid] = member.display_name if member else f"ID {uid}"
+                except discord.NotFound:
+                    nick_cache[uid] = f"ID {uid}"
+            event['user_nick'] = nick_cache[uid]
+
+        # 4. Фильтрация всех событий
         filtered_events = all_events
         if log_type == 'night_log':
             night_events = []
             for event in filtered_events:
                 end_time_event = event['timestamp_dt']
+                # Убедимся что поинты > 0, чтобы избежать ошибки с timedelta
+                if event['points'] <= 0: continue
                 start_time_event = end_time_event - timedelta(minutes=event['points'])
                 night_start_boundary = end_time_event.replace(hour=2, minute=0, second=0, microsecond=0)
                 night_end_boundary = end_time_event.replace(hour=8, minute=0, second=0, microsecond=0)
@@ -214,7 +217,7 @@ class LogsCog(commands.Cog):
         for event in filtered_events:
             event['category'] = 'Other'
             for cat, event_list in categories.items():
-                if event['event_name'].lower().startswith(tuple(ev.lower() for ev in event_list)):
+                if event['event_name'].lower() in [ev.lower() for ev in event_list]:
                     event['category'] = cat
                     break
         
@@ -273,6 +276,7 @@ class LogsCog(commands.Cog):
         else:
             blum_list = self._load_json(self.blum_file, [])
             for event in events:
+                if event['points'] <= 0: continue # Не логируем ивенты без длительности
                 end_time = event['timestamp_dt']
                 start_time = end_time - timedelta(minutes=event['points'])
                 line = f"{start_time.strftime('%H:%M %d.%m.%Y')} | {end_time.strftime('%H:%M %d.%m.%Y')} | <@{event['user_id']}> | {event['user_nick']} | "

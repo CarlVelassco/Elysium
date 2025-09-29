@@ -9,7 +9,7 @@ import json
 import re
 from main import is_admin
 
-# --- Вспомогательные классы для UI (без изменений) ---
+# --- Вспомогательные классы для UI ---
 
 class DateRangeModal(discord.ui.Modal, title='Укажите диапазон дат'):
     def __init__(self, category_name: str, log_type: str, user_id: int, cog_instance):
@@ -28,27 +28,61 @@ class DateRangeModal(discord.ui.Modal, title='Укажите диапазон д
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
-            events = await self.cog_instance._get_events_in_range(
-                interaction, self.date_range_input.value, self.log_type, 
-                user_id=self.user_id, category_name=self.category_name
-            )
-            if not events:
-                await interaction.followup.send("За указанный период не найдено ивентов.", ephemeral=True)
-                return
+            # --- ИЗМЕНЕНИЕ: Обработка нового пункта "Makser (Все отчеты)" ---
+            if self.log_type == 'makser' and self.category_name == '__all_reports__':
+                categories_to_process = ["__all__"]
+                categories_data = self.cog_instance._load_json(self.cog_instance.categories_file, {})
+                categories_to_process.extend(list(categories_data.keys()))
+                categories_to_process.append("Other")
 
-            log_file = await self.cog_instance.generate_log_file(
-                events, self.date_range_input.value, self.log_type, category_name=self.category_name
-            )
+                generated_files = []
+                for category in categories_to_process:
+                    events = await self.cog_instance._get_events_in_range(
+                        interaction, self.date_range_input.value, self.log_type,
+                        user_id=None, category_name=category
+                    )
+                    if events:
+                        log_file = await self.cog_instance.generate_log_file(
+                            events, self.date_range_input.value, self.log_type, category_name=category
+                        )
+                        generated_files.append(log_file)
+
+                if not generated_files:
+                    await interaction.followup.send("За указанный период не найдено ивентов ни в одной из категорий.", ephemeral=True)
+                    return
+
+                log_channel_id = int(os.getenv("LOG_CHANNEL_ID"))
+                log_channel = self.cog_instance.bot.get_channel(log_channel_id)
+
+                if log_channel:
+                    await log_channel.send(files=generated_files)
+                    await interaction.followup.send(f"Все {len(generated_files)} отчетов Makser успешно созданы и отправлены в канал {log_channel.mention}.", ephemeral=True)
+                else:
+                    await interaction.followup.send("Ошибка: Не удалось найти канал для логов.", ephemeral=True)
             
-            log_channel_id = int(os.getenv("LOG_CHANNEL_ID"))
-            log_channel = self.cog_instance.bot.get_channel(log_channel_id)
-
-            if log_channel:
-                await log_channel.send(file=log_file)
-                user_mention = f" для <@{self.user_id}>" if self.user_id else ""
-                await interaction.followup.send(f"Лог{user_mention} успешно создан и отправлен в канал {log_channel.mention}.", ephemeral=True)
+            # --- Старая логика для одиночных отчетов ---
             else:
-                await interaction.followup.send("Ошибка: Не удалось найти канал для логов. Проверьте LOG_CHANNEL_ID.", ephemeral=True)
+                events = await self.cog_instance._get_events_in_range(
+                    interaction, self.date_range_input.value, self.log_type, 
+                    user_id=self.user_id, category_name=self.category_name
+                )
+                if not events:
+                    await interaction.followup.send("За указанный период не найдено ивентов.", ephemeral=True)
+                    return
+
+                log_file = await self.cog_instance.generate_log_file(
+                    events, self.date_range_input.value, self.log_type, category_name=self.category_name
+                )
+                
+                log_channel_id = int(os.getenv("LOG_CHANNEL_ID"))
+                log_channel = self.cog_instance.bot.get_channel(log_channel_id)
+
+                if log_channel:
+                    await log_channel.send(file=log_file)
+                    user_mention = f" для <@{self.user_id}>" if self.user_id else ""
+                    await interaction.followup.send(f"Лог{user_mention} успешно создан и отправлен в канал {log_channel.mention}.", ephemeral=True)
+                else:
+                    await interaction.followup.send("Ошибка: Не удалось найти канал для логов.", ephemeral=True)
 
         except ValueError as e:
             await interaction.followup.send(f"Ошибка: {e}", ephemeral=True)
@@ -60,6 +94,13 @@ class MakserSelect(discord.ui.Select):
     def __init__(self, cog_instance):
         self.cog = cog_instance
         options = []
+        
+        # --- ИЗМЕНЕНИЕ: Добавлен новый пункт для всех отчетов ---
+        options.append(discord.SelectOption(
+            label="Makser (Все отчеты)",
+            value="__all_reports__",
+            description="Сгенерировать все отчеты Makser за период"
+        ))
         
         options.append(discord.SelectOption(
             label="Общий", 
@@ -78,12 +119,12 @@ class MakserSelect(discord.ui.Select):
         except Exception as e:
             print(f"Ошибка загрузки категорий для MakserSelect: {e}")
 
-        if len(options) == 1:
+        if len(options) <= 2: # Проверяем <=2 из-за добавления нового пункта
              options.append(discord.SelectOption(label="Категории не найдены", value="disabled", description="Создайте категории командой /category create"))
 
 
         super().__init__(
-            placeholder="Выберите категорию для отчета...", min_values=1, max_values=1, options=options,
+            placeholder="Выберите тип отчета для создания...", min_values=1, max_values=1, options=options,
             disabled=(len(options) > 0 and options[0].value == "disabled")
         )
 
@@ -177,7 +218,6 @@ class LogsCog(commands.Cog):
                     if parsed_data['points'] > 0 and parsed_data['user_id'] is not None:
                         all_events.append(parsed_data)
 
-        # --- НОВЫЙ БЛОК: Поиск ников для ручных записей за пределами диапазона ---
         manual_entries_in_range = [e for e in manual_points if start_time <= datetime.fromisoformat(e['end_time_iso']) < end_time]
         users_needing_full_search = {
             e['user_id'] for e in manual_entries_in_range 
@@ -200,7 +240,6 @@ class LogsCog(commands.Cog):
                                 historical_nick_cache[uid] = user_nick
                                 users_needing_full_search.remove(uid)
 
-        # --- ОБРАБОТКА РУЧНЫХ ЗАПИСЕЙ ---
         current_nick_cache = {}
         for entry in manual_entries_in_range:
             user_nick = 'N/A'
@@ -225,7 +264,6 @@ class LogsCog(commands.Cog):
                 'event_name': entry['event_name'], 'timestamp_dt': datetime.fromisoformat(entry['end_time_iso'])
             })
         
-        # --- ФИЛЬТРАЦИЯ ---
         filtered_events = all_events
         if log_type == 'night_log':
             night_events = []
@@ -273,7 +311,8 @@ class LogsCog(commands.Cog):
             
             sorted_users = sorted(user_points.items(), key=lambda item: item[1], reverse=True)
             for i, (user_id, points) in enumerate(sorted_users, 1):
-                buffer.write(f"{i}. <@{user_id}> - {points} баллов\n")
+                # --- ИЗМЕНЕНИЕ: Формат вывода на ID пользователя ---
+                buffer.write(f"{i}. {user_id} - {points} баллов\n")
         
         elif log_type == 'eventstats':
             buffer.write(f"Статистика по ивентам за {date_range_str}\n\n")
@@ -343,8 +382,12 @@ class LogsCog(commands.Cog):
             buffer.write(f"\nИтог: {total_points} баллов")
 
         buffer.seek(0)
+        
+        # Имя файла для отчета Makser
+        file_category_name = category_name.replace('__all__', 'Общий')
         safe_date_range = re.sub(r'[<>:"/\\|?*]', '_', date_range_str)
-        filename = f"log_{log_type}_{safe_date_range}.txt"
+        filename = f"{file_category_name}_{safe_date_range}.txt" if log_type == 'makser' else f"log_{log_type}_{safe_date_range}.txt"
+
         return discord.File(buffer, filename=filename)
 
     # --- Команды ---
@@ -381,7 +424,7 @@ class LogsCog(commands.Cog):
     async def makser(self, interaction: discord.Interaction):
         try:
             view = MakserView(self)
-            await interaction.response.send_message("Выберите категорию для отчета:", view=view, ephemeral=True)
+            await interaction.response.send_message("Выберите тип отчета для создания:", view=view, ephemeral=True)
         except Exception as e:
             print(f"Критическая ошибка при создании вида для команды /makser: {e}")
             await interaction.response.send_message("Произошла ошибка при отображении панели.", ephemeral=True)

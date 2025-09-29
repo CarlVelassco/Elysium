@@ -136,22 +136,18 @@ class LogsCog(commands.Cog):
         
         all_events = []
         
-        # 1. Загрузка ручных правок
         manual_points = self._load_json(self.points_file, [])
         edited_message_ids = {entry['original_message_id'] for entry in manual_points if 'original_message_id' in entry}
         
-        # 2. Парсинг канала, кеширование никнеймов
         original_nick_cache = {}
         historical_nick_cache = {}
-
+        
         parse_channel_id = int(os.getenv("PARSE_CHANNEL_ID"))
         channel = self.bot.get_channel(parse_channel_id)
         if not channel:
-            if interaction.is_response(): await interaction.followup.send("Ошибка: Не удалось найти канал для парсинга.", ephemeral=True)
-            else: await interaction.response.send_message("Ошибка: Не удалось найти канал для парсинга.", ephemeral=True)
+            await interaction.followup.send("Ошибка: Не удалось найти канал для парсинга.", ephemeral=True)
             return []
 
-        # Итерация от новых сообщений к старым, что идеально для кеша "последнего никнейма"
         async for message in channel.history(limit=None, after=start_time, before=end_time):
             if not message.embeds: continue
             for embed in message.embeds:
@@ -173,52 +169,63 @@ class LogsCog(commands.Cog):
                         parsed_data['event_name'] = field.value.replace('`', '').strip()
                 
                 if parsed_data['user_id']:
-                    # Кеш для измененных ивентов (по ID сообщения)
                     original_nick_cache[message.id] = parsed_data['user_nick']
-                    # Кеш для ручных ивентов (последний встреченный ник по ID юзера)
                     if parsed_data['user_id'] not in historical_nick_cache:
                         historical_nick_cache[parsed_data['user_id']] = parsed_data['user_nick']
 
-                # Добавляем в лог только те ивенты, которые не были изменены вручную
                 if message.id not in edited_message_ids:
                     if parsed_data['points'] > 0 and parsed_data['user_id'] is not None:
                         all_events.append(parsed_data)
 
-        # 3. Обработка ручных записей
+        # --- НОВЫЙ БЛОК: Поиск ников для ручных записей за пределами диапазона ---
+        manual_entries_in_range = [e for e in manual_points if start_time <= datetime.fromisoformat(e['end_time_iso']) < end_time]
+        users_needing_full_search = {
+            e['user_id'] for e in manual_entries_in_range 
+            if not e.get('original_message_id') and e['user_id'] not in historical_nick_cache
+        }
+
+        if users_needing_full_search:
+            async for message in channel.history(limit=None): 
+                if not users_needing_full_search: break
+                if not message.embeds: continue
+                for embed in message.embeds:
+                    if embed.title != "Отчет о проведенном ивенте": continue
+                    if embed.description:
+                        match = re.search(r'<@(\d+)>', embed.description)
+                        if match:
+                            uid = int(match.group(1))
+                            if uid in users_needing_full_search:
+                                nick_part = embed.description[match.end():].strip()
+                                user_nick = nick_part.replace('`', '').strip() or 'N/A'
+                                historical_nick_cache[uid] = user_nick
+                                users_needing_full_search.remove(uid)
+
+        # --- ОБРАБОТКА РУЧНЫХ ЗАПИСЕЙ ---
         current_nick_cache = {}
-        for entry in manual_points:
-            end_dt = datetime.fromisoformat(entry['end_time_iso'])
-            if start_time <= end_dt < end_time:
-                user_nick = 'N/A'
-                original_message_id = entry.get('original_message_id')
-                uid = entry['user_id']
-                
-                # Приоритет 1: Ник из оригинального сообщения для измененных ивентов
-                if original_message_id and original_message_id in original_nick_cache:
-                    user_nick = original_nick_cache[original_message_id]
-                # Приоритет 2: Ник из последнего ивента в логе для ручных ивентов
-                elif uid in historical_nick_cache:
-                    user_nick = historical_nick_cache[uid]
-                # Приоритет 3: Запасной вариант - актуальный ник с сервера
-                else:
-                    if uid not in current_nick_cache:
-                        try:
-                            member = await interaction.guild.fetch_member(uid)
-                            current_nick_cache[uid] = member.display_name if member else f"ID {uid}"
-                        except discord.NotFound:
-                            current_nick_cache[uid] = f"ID {uid}"
-                    user_nick = current_nick_cache[uid]
-                
-                manual_event = {
-                    'user_id': entry['user_id'],
-                    'user_nick': user_nick,
-                    'points': entry['points'],
-                    'event_name': entry['event_name'],
-                    'timestamp_dt': end_dt
-                }
-                all_events.append(manual_event)
+        for entry in manual_entries_in_range:
+            user_nick = 'N/A'
+            original_message_id = entry.get('original_message_id')
+            uid = entry['user_id']
+            
+            if original_message_id and original_message_id in original_nick_cache:
+                user_nick = original_nick_cache[original_message_id]
+            elif uid in historical_nick_cache:
+                user_nick = historical_nick_cache[uid]
+            else:
+                if uid not in current_nick_cache:
+                    try:
+                        member = await interaction.guild.fetch_member(uid)
+                        current_nick_cache[uid] = member.display_name if member else f"ID {uid}"
+                    except discord.NotFound:
+                        current_nick_cache[uid] = f"ID {uid}"
+                user_nick = current_nick_cache[uid]
+            
+            all_events.append({
+                'user_id': uid, 'user_nick': user_nick, 'points': entry['points'],
+                'event_name': entry['event_name'], 'timestamp_dt': datetime.fromisoformat(entry['end_time_iso'])
+            })
         
-        # 4. Фильтрация всех событий
+        # --- ФИЛЬТРАЦИЯ ---
         filtered_events = all_events
         if log_type == 'night_log':
             night_events = []
@@ -340,7 +347,7 @@ class LogsCog(commands.Cog):
         filename = f"log_{log_type}_{safe_date_range}.txt"
         return discord.File(buffer, filename=filename)
 
-    # --- Команды (без изменений) ---
+    # --- Команды ---
     @app_commands.command(name="logs", description="Общий лог за дату или период.")
     @app_commands.guild_only()
     async def logs(self, interaction: discord.Interaction):

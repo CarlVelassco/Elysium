@@ -28,6 +28,7 @@ class DateRangeModal(discord.ui.Modal, title='Укажите диапазон д
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
+            # Используем _get_events_in_range_v2 с новой логикой
             events = await self.cog_instance._get_events_in_range(
                 interaction, self.date_range_input.value, self.log_type, 
                 user_id=self.user_id, category_name=self.category_name
@@ -136,11 +137,12 @@ class LogsCog(commands.Cog):
         
         all_events = []
         
-        # 1. Загрузка ручных записей и определение ID сообщений, которые были изменены
+        # 1. Загрузка ручных правок и создание списка ID измененных сообщений
         manual_points = self._load_json(self.points_file, [])
         edited_message_ids = {entry['original_message_id'] for entry in manual_points if 'original_message_id' in entry}
         
-        # 2. Парсинг ивентов из эмбедов, пропуская измененные
+        # 2. Парсинг канала: кешируем ники из эмбедов и добавляем нетронутые ивенты
+        original_nick_cache = {}
         parse_channel_id = int(os.getenv("PARSE_CHANNEL_ID"))
         channel = self.bot.get_channel(parse_channel_id)
         if not channel:
@@ -149,60 +151,73 @@ class LogsCog(commands.Cog):
             return []
 
         async for message in channel.history(limit=None, after=start_time, before=end_time):
-            if message.id in edited_message_ids:
-                continue
-
             if not message.embeds: continue
             for embed in message.embeds:
                 if embed.title != "Отчет о проведенном ивенте": continue
-                # --- ИЗМЕНЕНИЕ ЛОГИКИ НИКНЕЙМА ---
-                data = {'user_id': None, 'points': 0, 'event_name': 'Без названия', 'timestamp_dt': message.created_at.astimezone(self.moscow_tz)}
+                
+                # Всегда парсим данные для кеша никнеймов
+                parsed_data = {'user_id': None, 'user_nick': 'N/A', 'points': 0, 'event_name': 'Без названия', 'timestamp_dt': message.created_at.astimezone(self.moscow_tz)}
                 if embed.description:
                     match = re.search(r'<@(\d+)>', embed.description)
                     if match:
-                        data['user_id'] = int(match.group(1))
+                        parsed_data['user_id'] = int(match.group(1))
+                        nick_part = embed.description[match.end():].strip()
+                        parsed_data['user_nick'] = nick_part.replace('`', '').strip() or 'N/A'
                 for field in embed.fields:
                     clean_field_name = field.name.lower().replace('>', '').strip()
                     if clean_field_name == 'получено':
-                        try: data['points'] = int(re.search(r'\d+', field.value).group())
+                        try: parsed_data['points'] = int(re.search(r'\d+', field.value).group())
                         except: continue
                     elif clean_field_name == 'ивент':
-                        data['event_name'] = field.value.replace('`', '').strip()
-                if data['points'] > 0 and data['user_id'] is not None:
-                    all_events.append(data)
+                        parsed_data['event_name'] = field.value.replace('`', '').strip()
+                
+                # Если нашли ID, кешируем ник из этого сообщения
+                if parsed_data['user_id']:
+                    original_nick_cache[message.id] = parsed_data['user_nick']
 
-        # 3. Добавление ручных записей в общий список
+                # Дедупликация: добавляем в лог только те ивенты, которых нет в списке измененных
+                if message.id not in edited_message_ids:
+                    if parsed_data['points'] > 0 and parsed_data['user_id'] is not None:
+                        all_events.append(parsed_data)
+
+        # 3. Обработка ручных записей (включая измененные ивенты)
+        current_nick_cache = {}
         for entry in manual_points:
             end_dt = datetime.fromisoformat(entry['end_time_iso'])
             if start_time <= end_dt < end_time:
+                user_nick = 'N/A'
+                original_message_id = entry.get('original_message_id')
+                
+                # Если это измененный ивент, берем ник из кеша оригинальных сообщений
+                if original_message_id and original_message_id in original_nick_cache:
+                    user_nick = original_nick_cache[original_message_id]
+                # Иначе (это чисто ручная запись), получаем актуальный ник
+                else:
+                    uid = entry['user_id']
+                    if uid not in current_nick_cache:
+                        try:
+                            member = await interaction.guild.fetch_member(uid)
+                            current_nick_cache[uid] = member.display_name if member else f"ID {uid}"
+                        except discord.NotFound:
+                            current_nick_cache[uid] = f"ID {uid}"
+                    user_nick = current_nick_cache[uid]
+                
                 manual_event = {
                     'user_id': entry['user_id'],
+                    'user_nick': user_nick,
                     'points': entry['points'],
                     'event_name': entry['event_name'],
                     'timestamp_dt': end_dt
                 }
                 all_events.append(manual_event)
         
-        # --- НОВЫЙ БЛОК: ПОЛУЧЕНИЕ АКТУАЛЬНЫХ НИКНЕЙМОВ ---
-        nick_cache = {}
-        for event in all_events:
-            uid = event['user_id']
-            if uid not in nick_cache:
-                try:
-                    member = await interaction.guild.fetch_member(uid)
-                    nick_cache[uid] = member.display_name if member else f"ID {uid}"
-                except discord.NotFound:
-                    nick_cache[uid] = f"ID {uid}"
-            event['user_nick'] = nick_cache[uid]
-
         # 4. Фильтрация всех событий
         filtered_events = all_events
         if log_type == 'night_log':
             night_events = []
             for event in filtered_events:
-                end_time_event = event['timestamp_dt']
-                # Убедимся что поинты > 0, чтобы избежать ошибки с timedelta
                 if event['points'] <= 0: continue
+                end_time_event = event['timestamp_dt']
                 start_time_event = end_time_event - timedelta(minutes=event['points'])
                 night_start_boundary = end_time_event.replace(hour=2, minute=0, second=0, microsecond=0)
                 night_end_boundary = end_time_event.replace(hour=8, minute=0, second=0, microsecond=0)
@@ -244,6 +259,7 @@ class LogsCog(commands.Cog):
             
             sorted_users = sorted(user_points.items(), key=lambda item: item[1], reverse=True)
             for i, (user_id, points) in enumerate(sorted_users, 1):
+                # Используем упоминание для наглядности
                 buffer.write(f"{i}. <@{user_id}> - {points} баллов\n")
         
         elif log_type == 'eventstats':
@@ -276,7 +292,7 @@ class LogsCog(commands.Cog):
         else:
             blum_list = self._load_json(self.blum_file, [])
             for event in events:
-                if event['points'] <= 0: continue # Не логируем ивенты без длительности
+                if event['points'] <= 0: continue
                 end_time = event['timestamp_dt']
                 start_time = end_time - timedelta(minutes=event['points'])
                 line = f"{start_time.strftime('%H:%M %d.%m.%Y')} | {end_time.strftime('%H:%M %d.%m.%Y')} | <@{event['user_id']}> | {event['user_nick']} | "
@@ -318,7 +334,7 @@ class LogsCog(commands.Cog):
         filename = f"log_{log_type}_{safe_date_range}.txt"
         return discord.File(buffer, filename=filename)
 
-    # --- Команды (без изменений) ---
+    # --- Команды ---
     @app_commands.command(name="logs", description="Общий лог за дату или период.")
     @app_commands.guild_only()
     async def logs(self, interaction: discord.Interaction):
